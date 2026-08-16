@@ -174,6 +174,23 @@ class EinkDocumentBuilder:
         author_or_site: Optional[str] = None,
     ) -> bytes:
         """Render a structured Executive Summary PDF."""
+        title = (title or "Executive Brief").replace("\x00", "")
+        if source_url:
+            source_url = source_url.replace("\x00", "")
+        if author_or_site:
+            author_or_site = author_or_site.replace("\x00", "")
+        if key_takeaways:
+            key_takeaways = [str(k).replace("\x00", "") for k in key_takeaways]
+        if sections:
+            sanitized_sections = {}
+            for k, v in sections.items():
+                clean_k = str(k).replace("\x00", "")
+                if isinstance(v, list):
+                    sanitized_sections[clean_k] = [str(item).replace("\x00", "") for item in v]
+                else:
+                    sanitized_sections[clean_k] = str(v).replace("\x00", "")
+            sections = sanitized_sections
+
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer,
@@ -256,6 +273,13 @@ class EinkDocumentBuilder:
         soup_elements: Optional[Any] = None,
     ) -> bytes:
         """Render a clean reader view of a web article or markdown content with tables."""
+        title = (title or "Document").replace("\x00", "")
+        content_html_or_text = (content_html_or_text or "").replace("\x00", "")
+        if author:
+            author = author.replace("\x00", "")
+        if source_url:
+            source_url = source_url.replace("\x00", "")
+
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer,

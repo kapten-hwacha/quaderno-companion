@@ -252,6 +252,60 @@ class QuadernoClient:
                     raise
             raise
 
+    def _safe_dp_upload(self, dp: Any, fh: Any, remote_path: str) -> str:
+        """Robust upload handling both entry_id and document_id response schemas without crashes."""
+        import os
+        import re
+        from urllib.parse import quote_plus
+
+        raw_filename = os.path.basename(remote_path)
+        filename = re.sub(r'[\\/*?:"<>|]+', "_", raw_filename)
+        doc_id = None
+
+        try:
+            doc_id = dp._get_object_id(remote_path)
+        except Exception:
+            remote_directory = os.path.dirname(remote_path)
+            if remote_directory:
+                try:
+                    dp.new_folder(remote_directory)
+                except Exception:
+                    pass
+                try:
+                    directory_id = dp._get_object_id(remote_directory)
+                except Exception:
+                    directory_id = None
+            else:
+                directory_id = None
+
+            info = {
+                "file_name": filename,
+                "parent_folder_id": directory_id,
+                "document_source": "",
+            }
+            r = dp._post_endpoint("/documents2", data=info)
+            if r.ok:
+                doc = r.json()
+                if isinstance(doc, dict):
+                    doc_id = doc.get("document_id") or doc.get("entry_id") or doc.get("object_id")
+
+            if not doc_id:
+                try:
+                    doc_id = dp._get_object_id(remote_path)
+                except Exception:
+                    pass
+
+        if not doc_id:
+            raise RuntimeError(f"Could not allocate or resolve document_id for '{remote_path}'")
+
+        doc_url = f"/documents/{doc_id}/file"
+        fh.seek(0)
+        files = {"file": (quote_plus(filename), fh, "rb")}
+        put_resp = dp._endpoint_request("PUT", doc_url, None, files=files)
+        if not put_resp.ok:
+            raise RuntimeError(f"Failed to upload document file bytes: {put_resp.text}")
+        return str(doc_id)
+
     async def upload_document(
         self,
         pdf_data: Union[bytes, io.BytesIO],
@@ -274,16 +328,20 @@ class QuadernoClient:
 
             def _do_upload():
                 stream.seek(0)
-                dp.upload(stream, remote_path)
+                return self._safe_dp_upload(dp, stream, remote_path)
 
-            self._run_with_reauth(_do_upload)
+            doc_id = self._run_with_reauth(_do_upload)
 
             # Resolve document info
             try:
                 info = dp.list_document_info(remote_path)
-                return info or {"entry_id": dp._get_object_id(remote_path), "entry_path": remote_path}
+                if isinstance(info, dict):
+                    info.setdefault("entry_id", doc_id)
+                    info.setdefault("document_id", doc_id)
+                    info.setdefault("entry_path", remote_path)
+                    return info
+                return {"entry_id": doc_id, "document_id": doc_id, "entry_path": remote_path}
             except Exception:
-                doc_id = dp._get_object_id(remote_path)
                 return {"entry_id": doc_id, "document_id": doc_id, "entry_path": remote_path}
 
         result = await asyncio.to_thread(_upload)

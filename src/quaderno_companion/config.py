@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="QUADERNO_",
-        env_file=".env",
+        env_file=(str(Path.home() / ".config" / "quaderno" / ".env"), ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -120,11 +120,39 @@ class Settings(BaseSettings):
     server_host: str = Field(default="127.0.0.1")
     server_port: int = Field(default=5000)
 
-    # LLM Settings for Summarization / Agent
+    # Gemini Notebook / NotebookLM & LLM Settings for Summarization
+    notebook_url: Optional[str] = Field(
+        default=None,
+        description="Target Gemini Notebook (NotebookLM) URL (e.g. https://notebooklm.google.com/notebook/...).",
+    )
+    notebook_id: Optional[str] = Field(
+        default=None,
+        description="Target Gemini Notebook ID from the NotebookLM library.",
+    )
+    notebook_skill_dir: Optional[Path] = Field(
+        default=None,
+        description="Custom path to NotebookLM skill directory (defaults to ~/.gemini/config/skills/notebooklm).",
+    )
+    notebook_storage_path: Optional[Path] = Field(
+        default=None,
+        description="Path to NotebookLM storage_state.json auth file.",
+    )
+    notebook_mode: Literal["ephemeral", "shared", "auto"] = Field(
+        default="ephemeral",
+        description="NotebookLM operation mode: 'ephemeral' (spawn fresh notebook + cleanup), 'shared' (query existing notebook), 'auto'.",
+    )
+    notebook_cleanup: bool = Field(
+        default=True,
+        description="Whether to automatically delete ephemeral notebooks upon summary synthesis.",
+    )
+    summarizer_provider: str = Field(
+        default="gemini_api",
+        description="Default summarizer provider ('gemini_api', 'gemini_notebook', 'rule_based', 'auto').",
+    )
     gemini_api_key: Optional[str] = Field(default=None, alias="GEMINI_API_KEY")
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
-    llm_model: str = Field(default="gemini-2.5-flash")
+    llm_model: str = Field(default="gemini-3.5-flash-lite")
 
     @property
     def device_id_path(self) -> Path:

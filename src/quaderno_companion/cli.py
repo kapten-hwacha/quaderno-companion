@@ -118,6 +118,64 @@ def pair(
     run_async(_pair())
 
 
+@app.command(name="setup-api")
+def setup_api_cmd(
+    key: Optional[str] = typer.Option(None, "--key", "-k", help="Gemini API Key (skips prompt if provided)"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Gemini Model (defaults to gemini-2.5-flash)"),
+    verify: bool = typer.Option(True, "--verify/--no-verify", help="Verify API key with Google AI before saving"),
+):
+    """Run interactive setup wizard for Google Gemini API key and model selection."""
+    from quaderno_companion.setup_wizard import run_api_setup_wizard
+    success = run_api_setup_wizard(api_key=key, model=model, verify=verify)
+    if not success:
+        sys.exit(1)
+
+
+@app.command(name="setup")
+def setup_cmd():
+    """Run full interactive setup wizard (Pairing + Gemini AI API Key + Service setup)."""
+    rprint(
+        Panel(
+            "[bold white]Welcome to Fujitsu Quaderno Companion Setup[/bold white]\n\n"
+            "This wizard will help you configure:\n"
+            "  1. Device pairing and network bridge\n"
+            "  2. Google Gemini AI synthesis API key\n"
+            "  3. Menu bar app & background LaunchAgent",
+            title="Quaderno Companion Setup",
+            border_style="magenta",
+        )
+    )
+
+    # Step 1: Pairing check
+    if not device_manager.is_paired():
+        rprint("\n[bold yellow]Step 1: Quaderno Device Pairing[/bold yellow]")
+        do_pair = typer.confirm("Would you like to pair your Quaderno device now?", default=True)
+        if do_pair:
+            pin = typer.prompt("Enter PIN shown on Quaderno screen (or press Enter to probe)", default="")
+            try:
+                run_async(device_manager.pair_device(pin=pin if pin else None))
+                rprint("[bold green]✓ Device paired successfully![/bold green]")
+            except Exception as e:
+                rprint(f"[yellow]Pairing skipped or failed: {e}[/yellow]")
+    else:
+        rprint("[bold green]✓ Step 1: Device is already paired.[/bold green]")
+
+    # Step 2: Gemini API Key
+    rprint("\n[bold yellow]Step 2: Google Gemini AI Configuration[/bold yellow]")
+    from quaderno_companion.setup_wizard import run_api_setup_wizard
+    run_api_setup_wizard()
+
+    # Step 3: Service installation
+    rprint("\n[bold yellow]Step 3: Background Service & Menu Bar[/bold yellow]")
+    if sys.platform == "darwin":
+        install_bg = typer.confirm("Would you like to install the background menu bar LaunchAgent?", default=True)
+        if install_bg:
+            install_service()
+
+    rprint("\n[bold green]✓ Setup complete! You're ready to use Quaderno Companion.[/bold green]\n")
+
+
+
 @app.command()
 def push(
     source: Optional[str] = typer.Argument(None, help="URL, ArXiv paper, or file path (auto-detects active browser tab if omitted)"),
@@ -345,12 +403,28 @@ def summarize(
     source: str = typer.Argument(..., help="URL or text to summarize and push to Quaderno"),
     title: Optional[str] = typer.Option(None, "--title", "-t", help="Title for the summary brief"),
     pages: int = typer.Option(1, "--pages", "-P", help="Target summary page length (1–5)"),
+    notebook_url: Optional[str] = typer.Option(None, "--notebook-url", "-u", help="Gemini Notebook (NotebookLM) URL"),
+    notebook_id: Optional[str] = typer.Option(None, "--notebook-id", "-n", help="Notebook ID from NotebookLM library"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="Summarizer provider ('gemini_notebook', 'gemini_api', 'rule_based', 'auto')"),
+    mode: Optional[str] = typer.Option(None, "--mode", "-m", help="Notebook mode ('ephemeral' fresh notebook, 'shared' existing)"),
+    cleanup: bool = typer.Option(True, "--cleanup/--no-cleanup", help="Automatically delete ephemeral notebook upon completion"),
 ):
     """Generate a high-contrast E-ink summary brief and display it on Quaderno."""
     async def _sum():
-        with console.status(f"[bold cyan]Synthesizing {pages}-page E-ink summary for '{source}'..."):
+        active_mode = mode or ("shared" if notebook_url or notebook_id else settings.notebook_mode)
+        provider_info = f" via {provider or settings.summarizer_provider} ({active_mode})"
+        with console.status(f"[bold cyan]Synthesizing {pages}-page E-ink summary{provider_info} for '{source}'..."):
             try:
-                res = await agent.summarize_and_push(source, title=title, pages=pages)
+                res = await agent.summarize_and_push(
+                    source,
+                    title=title,
+                    pages=pages,
+                    notebook_url=notebook_url,
+                    notebook_id=notebook_id,
+                    provider=provider,
+                    notebook_mode=active_mode,
+                    cleanup=cleanup,
+                )
                 rprint(f"[bold green]✓[/bold green] {res['message']}")
             except Exception as e:
                 rprint(f"[bold red]Summarization failed:[/bold red] {e}")
@@ -476,6 +550,79 @@ def uninstall_service():
         rprint("[yellow]Service plist not found.[/yellow]")
 
 
+notebook_app = typer.Typer(
+    name="notebook",
+    help="Manage Google Gemini Notebook (NotebookLM) connection, auth, and notebooks.",
+)
+app.add_typer(notebook_app)
+
+
+@notebook_app.command(name="login")
+def notebook_login():
+    """Log in to Google Gemini Notebook (NotebookLM) via browser."""
+    import subprocess
+    rprint("[bold cyan]Opening Google login window for Gemini Notebook...[/bold cyan]")
+    try:
+        subprocess.run([sys.executable, "-m", "notebooklm", "login", "--browser", "chrome"], check=True)
+        rprint("[bold green]✓ Successfully authenticated with Google NotebookLM![/bold green]")
+    except Exception as e:
+        rprint(f"[bold red]Login failed:[/bold red] {e}")
+        sys.exit(1)
+
+
+@notebook_app.command(name="status")
+def notebook_status():
+    """Display Gemini Notebook (NotebookLM) connection and auth health."""
+    from quaderno_companion.pipeline.notebook_client import GeminiNotebookClient
+    client = GeminiNotebookClient()
+    storage = client.get_storage_path()
+    is_auth = client.is_authenticated()
+
+    rprint("\n[bold]Gemini Notebook (NotebookLM) Status:[/bold]")
+    rprint(f"  Authenticated: {'[green]Yes[/green]' if is_auth else '[red]No (run `quadctl notebook login`)[/red]'}")
+    rprint(f"  Storage File:  [cyan]{storage or 'Not found'}[/cyan]")
+
+    if is_auth:
+        async def _check_nbs():
+            lib = await client.get_library_notebooks()
+            nbs = lib.get("notebooks", [])
+            rprint(f"  Notebooks:     [bold]{len(nbs)}[/bold] found")
+            for nb in nbs[:5]:
+                rprint(f"    • {nb.get('title')} ([dim]{nb.get('id')}[/dim])")
+        run_async(_check_nbs())
+    rprint("")
+
+
+@notebook_app.command(name="list")
+def notebook_list():
+    """List registered notebooks in user's Gemini Notebook account."""
+    from quaderno_companion.pipeline.notebook_client import GeminiNotebookClient
+    client = GeminiNotebookClient()
+
+    async def _list():
+        lib = await client.get_library_notebooks()
+        nbs = lib.get("notebooks", [])
+        if not nbs:
+            rprint("[yellow]No notebooks found or not authenticated. Run `quadctl notebook login` first.[/yellow]")
+            return
+
+        table = Table(title="Google Gemini Notebooks")
+        table.add_column("Title", style="bold white")
+        table.add_column("ID", style="cyan")
+        table.add_column("Sources", justify="right")
+
+        for nb in nbs:
+            table.add_row(
+                str(nb.get("title", "Untitled")),
+                str(nb.get("id")),
+                str(nb.get("sources_count", "-")),
+            )
+        console.print(table)
+
+    run_async(_list())
+
+
 if __name__ == "__main__":
     app()
+
 

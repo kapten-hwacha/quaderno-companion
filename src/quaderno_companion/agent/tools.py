@@ -9,6 +9,7 @@ Exposes atomic, E-ink specific operations for LLM function calling and intent di
 
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional, TypedDict, Union
 
@@ -225,7 +226,8 @@ async def tool_summarize_to_eink(
     optimized_pdf = optimizer.optimize_pdf(pdf_bytes, trim_margins=False)
 
     page_label = f"_{pages}p" if pages > 1 else ""
-    filename = f"Summary_{int(time.time())}{page_label}_{doc_title[:30]}.pdf".replace(" ", "_")
+    clean_title = re.sub(r'[\\/*?:"<>|\s]+', "_", doc_title[:30]).strip("_")
+    filename = f"Summary_{int(time.time())}{page_label}_{clean_title or 'Doc'}.pdf"
     result = await device_manager.open_document(
         pdf_bytes=optimized_pdf,
         filename=filename,

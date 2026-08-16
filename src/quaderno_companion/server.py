@@ -158,6 +158,11 @@ class AgentPushRequest(BaseModel):
     title: Optional[str] = Field(None, description="Page title.")
     summarize: bool = Field(False, description="Whether to summarize before pushing.")
     pages: Optional[int] = Field(None, description="Target summary length in pages (1–5).")
+    notebook_url: Optional[str] = Field(None, description="Gemini Notebook URL.")
+    notebook_id: Optional[str] = Field(None, description="Gemini Notebook ID from library.")
+    provider: Optional[str] = Field(None, description="Summarizer provider ('gemini_notebook', 'gemini_api', 'rule_based', 'auto').")
+    notebook_mode: Optional[str] = Field(None, description="Notebook mode ('ephemeral' fresh notebook, 'shared' existing).")
+    cleanup: Optional[bool] = Field(None, description="Whether to auto-delete ephemeral notebook after summary.")
 
 
 class AgentChatRequest(BaseModel):
@@ -309,7 +314,16 @@ async def agent_push(req: AgentPushRequest):
     try:
         if req.summarize or (req.pages is not None and req.pages > 0):
             target_pages = req.pages or 1
-            return await agent.summarize_and_push(req.url, title=req.title, pages=target_pages)
+            return await agent.summarize_and_push(
+                req.url,
+                title=req.title,
+                pages=target_pages,
+                notebook_url=req.notebook_url,
+                notebook_id=req.notebook_id,
+                provider=req.provider,
+                notebook_mode=req.notebook_mode,
+                cleanup=req.cleanup,
+            )
         else:
             return await tool_push_document(source_url_or_path=req.url, title=req.title)
     except HTTPException:

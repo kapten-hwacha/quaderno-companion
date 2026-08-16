@@ -27,6 +27,8 @@ dependencies = [
     "rumps>=0.4.0",
     "lz4>=4.3.0",
     "pyobjc-framework-quartz>=12.2.2",
+    "patchright>=1.55.0",
+    "notebooklm-py[browser]>=0.8.1",
 ]
 
 [project.scripts]
