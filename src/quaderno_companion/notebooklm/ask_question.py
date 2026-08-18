@@ -4,10 +4,9 @@ Simple NotebookLM Question Interface
 """
 
 import argparse
+import re
 import sys
 import time
-import re
-from pathlib import Path
 from patchright.sync_api import sync_playwright
 
 from quaderno_companion.notebooklm.auth_manager import AuthManager
@@ -24,7 +23,7 @@ FOLLOW_UP_REMINDER = (
 )
 
 
-def ask_notebooklm(question: str, notebook_url: str, headless: bool = True) -> str:
+def ask_notebooklm(question: str, notebook_url: str, headless: bool = True) -> str | None:
     """
     Ask a question to NotebookLM
     """

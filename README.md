@@ -46,8 +46,8 @@ The agent ingests web pages, academic papers, and reading materials, optimizes t
 - **Intelligent Margin Trimming**: Detects content bounding box and trims excess academic paper margins for maximum text readability.
 - **Ultra-Fast Wireless Push**: Deflates and compresses PDF streams down to <300 KB for near-instant Bluetooth PAN transfer.
 - **Network Auto-Routing**: Automatically discovers and fails over across Wi-Fi (`digitalpaper.local` or static IP), Bluetooth PAN (`bnep0`/`en*`), and USB tethering (`172.25.47.1`).
-- **Reading Navigation Controller**: Changes pages (`next`, `prev`, `goto <n>`) programmatically without re-uploading documents.
-- **Autonomous Agent & Summarizer**: Synthesizes structured 1-page executive briefs from text/URLs directly into high-contrast E-ink layouts.
+- **Autonomous Agent & Summarizer**: Synthesizes structured 1–5 page executive briefs from text/URLs directly into high-contrast E-ink layouts via Google Gemini Notebook (formerly NotebookLM, *WIP / Experimental*) or Gemini AI API.
+- **Google Gemini Notebook Integration (WIP)**: Automates source ingestion, grounding synthesis, and summary extraction using ephemeral or shared Gemini Notebooks.
 - **1-Click Triggers**: Browser bookmarklet, Chrome extension (Manifest V3), and Raycast script commands for desktop workflows.
 
 ---
@@ -71,7 +71,7 @@ uv sync
 
 On your Fujitsu Quaderno:
 1. Go to **Settings** ➜ **Wi-Fi** / **Device Configuration** and locate the **Pairing PIN** (or enable pairing mode).
-2. Run the pairing command:
+2. Run the pairing command (or `uv run quadctl setup` for the interactive wizard):
 
 ```bash
 uv run quadctl pair
@@ -100,6 +100,10 @@ The daemon will use port 5000.
 | `uv run quadctl window` | Captures the currently active macOS window and pushes it to Quaderno |
 | `uv run quadctl preview` | Pushes/mirrors the document active in Apple Preview |
 | `uv run quadctl preview --watch` | Continuous real-time page mirror with Apple Preview |
+| `uv run quadctl summarize <url_or_text>` | Generates a 1–5 page E-ink brief via Gemini Notebook / API and pushes to display |
+| `uv run quadctl notebook login` | Logs in to Google Gemini Notebook (NotebookLM) via browser session |
+| `uv run quadctl notebook status` | Checks Gemini Notebook authentication and library status |
+| `uv run quadctl notebook list` | Lists notebooks in your Google Gemini Notebook library |
 | `uv run quadctl install-service` | Installs background auto-start daemon (macOS LaunchAgent) |
 | `uv run quadctl uninstall-service` | Removes background macOS LaunchAgent |
 | `uv run quadctl serve` | Starts the FastAPI daemon |
@@ -107,7 +111,6 @@ The daemon will use port 5000.
 | `uv run quadctl prev` | Returns to the previous page on the Quaderno |
 | `uv run quadctl goto <page>` | Jumps to a specific page number |
 | `uv run quadctl status` | Shows connection status, battery, storage, and active page |
-| `uv run quadctl summarize <url>` | Generates a 1-page E-ink brief and pushes to display |
 | `uv run quadctl optimize <in> <out>` | Optimizes a local PDF with margin trimming and scaling |
 
 ---
@@ -168,7 +171,7 @@ uv run quadctl app
 - **🌐 Push Active Browser Tab**: 1-click grab and send your active tab from Firefox, Safari, or Chrome.
 - **🖥️ Push Active Window**: 1-click capture and send the frontmost application window.
 - **🪞 Preview Mirror**: Checkbox toggle to automatically mirror pages in real-time as you scroll/navigate in Apple Preview.
-- **📝 Summarize Mode**: Checkbox toggle to synthesize 1-page E-ink executive briefs.
+- **📝 Summarize Length**: Interactive page slider (1–5 pages) for custom briefing depth.
 - **👁️ Push from Preview**: Instantly detects and sends your open document in Preview.
 - **📋 Push from Clipboard**: Instantly pushes whatever URL or text you copied (`Cmd+C`).
 
@@ -179,7 +182,34 @@ uv run quadctl install-service
 
 ---
 
-### 2. 🦊 Firefox Extension
+### 5. 🧠 Google Gemini Notebook (NotebookLM) Synthesis & Briefs *(WIP)*
+
+> [!NOTE]
+> **Work In Progress**: The Gemini Notebook / NotebookLM browser automation workflow is actively being refined. For fully automated headless environments or production pipelines, the direct Gemini API mode (`--provider gemini_api`) is also available.
+
+Generate multi-page E-ink briefs grounded directly in source documents via Google Gemini Notebook:
+
+```bash
+# 1. One-time authentication with Google:
+uv run quadctl notebook login
+
+# 2. Check notebook connection & status:
+uv run quadctl notebook status
+
+# 3. Summarize any article, PDF, or research paper into a custom E-ink brief:
+uv run quadctl summarize https://arxiv.org/abs/2312.00752 --pages 2
+
+# 4. Or use an existing shared notebook by URL / ID:
+uv run quadctl summarize "Query topic" --notebook-url "https://notebooklm.google.com/notebook/..." --pages 3
+```
+
+- **Ephemeral Mode (Default)**: Automatically spins up a fresh temporary notebook for the document, generates the grounded summary, and cleans up.
+- **Shared Mode**: Point directly to an existing research notebook with multiple accumulated sources.
+- **E-ink Optimization**: Automatically formatted for optimal legibility, bold headers, and crisp typography on Quaderno screens.
+
+---
+
+### 6. 🦊 Firefox Extension
 1. In Firefox, navigate to `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on...**.
 3. Select `manifest.json` inside the `triggers/firefox-extension/` directory.
@@ -187,7 +217,7 @@ uv run quadctl install-service
 
 ---
 
-### 3. 🌐 Browser Bookmarklet (Universal 1-Click Push)
+### 7. 🌐 Browser Bookmarklet (Universal 1-Click Push)
 Create a new bookmark with this URL:
 
 ```javascript
@@ -196,7 +226,7 @@ javascript:(function(){fetch('http://localhost:5000/api/agent/push',{method:'POS
 
 ---
 
-### 4. ⚡ Raycast Script Commands
+### 8. ⚡ Raycast Script Commands
 Symlink or copy the scripts in `triggers/raycast/` to your Raycast scripts directory:
 - `quaderno-next.sh` (e.g. mapped to foot pedal or shortcut)
 - `quaderno-prev.sh`

@@ -147,7 +147,7 @@ def setup_cmd():
     )
 
     # Step 1: Pairing check
-    if not device_manager.is_paired():
+    if not device_manager.is_paired:
         rprint("\n[bold yellow]Step 1: Quaderno Device Pairing[/bold yellow]")
         do_pair = typer.confirm("Would you like to pair your Quaderno device now?", default=True)
         if do_pair:
