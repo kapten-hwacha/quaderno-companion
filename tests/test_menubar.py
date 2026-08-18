@@ -130,3 +130,54 @@ def test_menubar_execute_push_or_summarize_routing():
         time.sleep(0.1)
 
         mock_push.assert_called_once_with(source_url_or_path="https://example.com/test", title="Test Page", page=2)
+
+
+def test_menubar_instant_page_navigation():
+    """Verify that nav_prev and nav_next update page state and UI instantly."""
+    from quaderno_companion.device.manager import ReadingState
+
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    # Set up active document reading state
+    state = ReadingState(
+        document_id="doc-123",
+        title="Sample Document",
+        current_page=5,
+        total_pages=10,
+    )
+    app._last_reading_state = state
+
+    with patch("quaderno_companion.triggers.menubar.tool_navigate_reader", new_callable=AsyncMock) as mock_nav, \
+         patch.object(app, "refresh_telemetry"):
+        # Test nav_next
+        app.nav_next(None)
+        assert app._last_reading_state.current_page == 6
+        assert "Sample Document (6/10)" in app.doc_item.title
+        if getattr(app, "slider_page_badge", None) is not None:
+            assert "6 / 10" in app.slider_page_badge.stringValue()
+
+        # Test nav_prev
+        app.nav_prev(None)
+        assert app._last_reading_state.current_page == 5
+        assert "Sample Document (5/10)" in app.doc_item.title
+        if getattr(app, "slider_page_badge", None) is not None:
+            assert "5 / 10" in app.slider_page_badge.stringValue()
+
+        # Test consecutive rapid nav_next clicks
+        app.nav_next(None)
+        assert app._last_reading_state.current_page == 6
+        app.nav_next(None)
+        assert app._last_reading_state.current_page == 7
+        app.nav_next(None)
+        assert app._last_reading_state.current_page == 8
+        assert "Sample Document (8/10)" in app.doc_item.title
+
+        # Test consecutive rapid nav_prev clicks
+        app.nav_prev(None)
+        assert app._last_reading_state.current_page == 7
+        app.nav_prev(None)
+        assert app._last_reading_state.current_page == 6
+        assert "Sample Document (6/10)" in app.doc_item.title
+
+

@@ -4,7 +4,7 @@ Provides seamless system-wide desktop integration:
 - Real-time battery and reading state in macOS menu bar
 - Push URL/text directly from Clipboard
 - Native File Picker to push local PDFs/documents
-- Fast Page Navigation controls (Next/Prev/Goto)
+- Fast Page Navigation controls (Next/Prev)
 - Embedded background FastAPI daemon runner
 """
 
@@ -172,16 +172,13 @@ class QuadernoMenubarApp(AppBase):
                     if idx == 0:
                         self.app.nav_prev(None)
                     elif idx == 1:
-                        self.app.nav_goto(None)
-                    elif idx == 2:
                         self.app.nav_next(None)
 
             self._nav_handler = _NavSegmentHandler.alloc().initWithApp_(self)
             seg = AppKit.NSSegmentedControl.alloc().initWithFrame_(AppKit.NSMakeRect(18, 4, 190, 24))
-            seg.setSegmentCount_(3)
+            seg.setSegmentCount_(2)
             seg.setLabel_forSegment_("◀ Prev", 0)
-            seg.setLabel_forSegment_("🔢 Go to", 1)
-            seg.setLabel_forSegment_("Next ▶", 2)
+            seg.setLabel_forSegment_("Next ▶", 1)
             seg.setTrackingMode_(AppKit.NSSegmentSwitchTrackingMomentary)
             seg.setTarget_(self._nav_handler)
             seg.setAction_(objc.selector(self._nav_handler.handleSegment_, signature=b"v@:@"))
@@ -452,7 +449,7 @@ class QuadernoMenubarApp(AppBase):
 
             self.watch_mode_item, self.watch_switch, self._watch_handler_inst = _create_switch_item("🪞 Preview Mirror", "watch")
         except Exception:
-            self.page_control_item = rumps.MenuItem("◀ Prev  |  🔢 Go to...  |  Next ▶", callback=self.nav_next)
+            self.page_control_item = rumps.MenuItem("◀ Prev  |  Next ▶", callback=self.nav_next)
             self.page_slider_item = rumps.MenuItem("")
             self.summary_slider_item = rumps.MenuItem("📝 Summary: Off", callback=self.cycle_summary_pages)
             self.summary_slider = None
@@ -663,6 +660,12 @@ class QuadernoMenubarApp(AppBase):
 
     def _dispatch_to_main(self, fn):
         """Safely execute a UI update callback on the AppKit main thread."""
+        if threading.current_thread() is threading.main_thread():
+            try:
+                fn()
+                return
+            except Exception:
+                pass
         if AppKit is not None:
             try:
                 AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
@@ -705,9 +708,8 @@ class QuadernoMenubarApp(AppBase):
                             import time
                             self._last_reading_state = status.reading_state
                             title_short = status.reading_state.title[:24] + ("..." if len(status.reading_state.title) > 24 else "")
-                            self.doc_item.title = f"📖 {title_short} ({status.reading_state.current_page}/{status.reading_state.total_pages})"
                             
-                            # Prevent background poller from pulling slider back during user scrubbing
+                            # Prevent background poller from pulling slider or title back during user navigation
                             is_recent_nav = (time.time() - getattr(self, "_last_user_nav_time", 0.0)) < 3.0
                             tot = max(1, status.reading_state.total_pages)
                             cur = max(1, min(status.reading_state.current_page, tot))
@@ -717,11 +719,14 @@ class QuadernoMenubarApp(AppBase):
                                 self.page_slider.setMaxValue_(float(tot))
                                 self.page_slider.setNumberOfTickMarks_(0)
                                 self.page_slider.setAllowsTickMarkValuesOnly_(False)
-                                if not is_recent_nav:
-                                    self.page_slider.setDoubleValue_(float(cur))
-                                    if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
-                                        self.slider_page_badge.setStringValue_(f"p. {cur} / {tot}")
                                 self.page_slider.setEnabled_(tot > 1)
+
+                            if not is_recent_nav:
+                                self.doc_item.title = f"📖 {title_short} ({status.reading_state.current_page}/{status.reading_state.total_pages})"
+                                if hasattr(self, "page_slider") and self.page_slider is not None:
+                                    self.page_slider.setDoubleValue_(float(cur))
+                                if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
+                                    self.slider_page_badge.setStringValue_(f"p. {cur} / {tot}")
 
                             # Dynamically populate Chapters Dropdown Submenu immediately
                             doc_id = status.reading_state.document_id
@@ -892,30 +897,59 @@ class QuadernoMenubarApp(AppBase):
         """Previous page on Quaderno."""
         self._async_nav("prev")
 
-    def nav_goto(self, _):
-        """Prompt for page number to jump to."""
-        val = prompt_text_dialog(
-            title="Quaderno Navigation",
-            prompt="Enter page number to jump to:",
-            default_text="",
-        )
-        if val:
-            try:
-                page_num = int(val.strip())
-                self._async_nav("goto", page=page_num)
-            except ValueError:
-                pass
-
     def _async_nav(self, action: Literal["next", "prev", "goto", "offset"], page: Optional[int] = None):
+        import time
+        reading_state = getattr(self, "_last_reading_state", None) or getattr(device_manager, "_reading_state", None)
+        if not reading_state or not reading_state.document_id:
+            device_manager._load_persisted_state()
+            reading_state = device_manager._reading_state
+
+        cur = getattr(reading_state, "current_page", 1) if reading_state else 1
+        tot = max(1, getattr(reading_state, "total_pages", 1)) if reading_state else 1
+        doc_title = (reading_state.title if reading_state and reading_state.title else None) or "Document"
+
+        if action == "next":
+            target_page = min(tot, cur + 1)
+        elif action == "prev":
+            target_page = max(1, cur - 1)
+        elif action == "goto":
+            if page is None:
+                return
+            target_page = max(1, min(tot, page))
+        elif action == "offset":
+            delta = page or 0
+            target_page = max(1, min(tot, cur + delta))
+        else:
+            return
+
+        if reading_state:
+            reading_state.current_page = target_page
+            self._last_reading_state = reading_state
+        if hasattr(device_manager, "_reading_state"):
+            device_manager._reading_state.current_page = target_page
+            device_manager._last_nav_time = time.time()
+        self._last_user_nav_time = time.time()
+
+        def _apply_optimistic():
+            title_short = doc_title[:24] + ("..." if len(doc_title) > 24 else "")
+            self.doc_item.title = f"📖 {title_short} ({target_page}/{tot})"
+            if hasattr(self, "page_slider") and self.page_slider is not None:
+                self.page_slider.setDoubleValue_(float(target_page))
+            if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
+                self.slider_page_badge.setStringValue_(f"p. {target_page} / {tot}")
+
+        self._dispatch_to_main(_apply_optimistic)
+
         def _nav():
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(tool_navigate_reader(action=action, page=page))
+                loop.run_until_complete(tool_navigate_reader(action="goto", page=target_page))
                 loop.close()
                 self.refresh_telemetry()
             except Exception as e:
                 show_alert("Navigation Error", str(e))
+                self.refresh_telemetry()
         threading.Thread(target=_nav, daemon=True).start()
 
     def _get_clipboard_text(self) -> str:

@@ -300,28 +300,30 @@ class QuadernoDeviceManager:
         client = await self.get_client()
 
         # Check hardware recent doc state first
-        doc_id = None
-        curr = 1
-        total = 1
+        doc_id = self._reading_state.document_id
+        curr = self._reading_state.current_page or 1
+        total = max(1, self._reading_state.total_pages)
         try:
             recent = await client.get_recent_document()
             if recent and recent.get("entry_id"):
-                doc_id = recent["entry_id"]
-                curr = int(recent.get("current_page", 1))
-                total = int(recent.get("total_page", 1)) if recent.get("total_page") else 1
+                recent_id = recent["entry_id"]
+                if not doc_id or doc_id == recent_id:
+                    doc_id = recent_id
+                    if recent.get("total_page"):
+                        total = int(recent.get("total_page"))
+                else:
+                    # Switched document on device
+                    doc_id = recent_id
+                    curr = int(recent.get("current_page", 1))
+                    total = int(recent.get("total_page", 1)) if recent.get("total_page") else 1
         except Exception:
             pass
 
         if not doc_id:
-            if self._reading_state.document_id:
-                doc_id = self._reading_state.document_id
-                curr = self._reading_state.current_page
-                total = max(1, self._reading_state.total_pages)
-            else:
-                self._load_persisted_state()
-                doc_id = self._reading_state.document_id
-                curr = self._reading_state.current_page
-                total = max(1, self._reading_state.total_pages)
+            self._load_persisted_state()
+            doc_id = self._reading_state.document_id
+            curr = self._reading_state.current_page or 1
+            total = max(1, self._reading_state.total_pages)
 
         if not doc_id:
             raise ValueError("No active document currently open on Quaderno.")
@@ -342,7 +344,10 @@ class QuadernoDeviceManager:
 
         await client.display_document(document_id=doc_id, page=target)
 
+        self._last_nav_time = time.time()
+        self._reading_state.document_id = doc_id
         self._reading_state.current_page = target
+        self._reading_state.total_pages = total
         self._reading_state.last_updated = datetime.now()
         self._save_persisted_state()
 
@@ -427,12 +432,17 @@ class QuadernoDeviceManager:
             try:
                 recent_res = await client.get_recent_document()
                 if isinstance(recent_res, dict) and recent_res.get("entry_id"):
-                    is_recent_push = (time.time() - getattr(self, "_last_pushed_time", 0.0)) < 300.0
                     recent_id = recent_res["entry_id"]
+                    is_recent_nav = (time.time() - getattr(self, "_last_nav_time", 0.0)) < 5.0
+                    is_recent_push = (time.time() - getattr(self, "_last_pushed_time", 0.0)) < 300.0
                     if not is_recent_push or recent_id == getattr(self, "_last_pushed_doc_id", None):
-                        cur_p = int(recent_res.get("current_page", 1))
-                        tot_p = int(recent_res.get("total_page", 1)) if recent_res.get("total_page") else 1
-                        doc_name = recent_res.get("entry_name") or recent_res.get("title") or "Document"
+                        tot_p = int(recent_res.get("total_page", 1)) if recent_res.get("total_page") else max(1, self._reading_state.total_pages)
+                        doc_name = recent_res.get("entry_name") or recent_res.get("title") or self._reading_state.title or "Document"
+                        if is_recent_nav and self._reading_state.document_id == recent_id:
+                            cur_p = self._reading_state.current_page
+                        else:
+                            cur_p = int(recent_res.get("current_page", 1))
+
                         self._reading_state = ReadingState(
                             document_id=recent_id,
                             title=doc_name,
