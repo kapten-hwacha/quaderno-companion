@@ -54,7 +54,6 @@ hidden_imports = [
     "dptrp1",
     "dptrp1.dptrp1",
     # Automation & Network
-    "patchright",
     "notebooklm",
     "bs4",
     "readability",

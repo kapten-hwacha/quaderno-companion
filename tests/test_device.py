@@ -12,7 +12,7 @@ async def test_router_candidate_probing():
     """Verify router tests candidates and returns the first reachable route."""
     router = NetworkRouter()
     
-    # Mock probe to succeed on the 2nd candidate (bluetooth_pan)
+    # Mock probe to succeed on bluetooth_pan candidate
     async def mock_probe(host, port, timeout=1.0):
         return host == "192.168.128.1"
 
@@ -21,6 +21,22 @@ async def test_router_candidate_probing():
         assert route is not None
         assert route.connection_type == "bluetooth_pan"
         assert route.host == "192.168.128.1"
+
+
+@pytest.mark.asyncio
+async def test_router_wifi_ap_probing():
+    """Verify router detects Quaderno SoftAP gateway 192.168.43.1."""
+    router = NetworkRouter()
+
+    async def mock_probe(host, port, timeout=1.0):
+        return host == "192.168.43.1"
+
+    with patch.object(router, "_probe_endpoint", side_effect=mock_probe):
+        route = await router.get_active_route(force_refresh=True)
+        assert route is not None
+        assert route.connection_type == "wifi_ap"
+        assert route.host == "192.168.43.1"
+
 
 
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch

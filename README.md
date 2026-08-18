@@ -1,6 +1,6 @@
 # Quaderno Companion 📖✨
 
-An autonomous background agent and zero-friction desktop bridge for the **Fujitsu Quaderno Gen 2** (A4 & A5 models) over local network protocols (Wi-Fi, Bluetooth PAN, and USB).
+An autonomous background agent and zero-friction desktop bridge for the **Fujitsu Quaderno Gen 2** (A4 & A5 models) over local network protocols (Wi-Fi, Wi-Fi Access Point / SoftAP, and USB).
 
 The agent ingests web pages, academic papers, and reading materials, optimizes them for E-ink rendering (margin trimming, native dimension scaling, Floyd-Steinberg dithering, and payload compression to <300 KB), pushes them to the device with zero friction, and controls reading navigation programmatically.
 
@@ -26,7 +26,7 @@ The agent ingests web pages, academic papers, and reading materials, optimizes t
 ┌───────────────────────────────┐ ┌───────────────────────────┐
 │     E-Ink Pipeline Tool       │ │   Quaderno Bridge Tool    │
 │ • ArXiv / URL / HTML Fetcher  │ │ • Network Auto-Router     │
-│ • Readability / Boilerplate   │ │   (Wi-Fi ➜ BT PAN ➜ USB)  │
+│ • Readability / Boilerplate   │ │   (Wi-Fi ➜ AP ➜ USB)      │
 │ • PyMuPDF Geometry Scaler     │ │ • `dpt-rp1-py` Low-Level  │
 │ • Floyd-Steinberg / Grayscale │ │ • Open2 & Viewer Control  │
 │ • Payload Compressor (<300KB) │ │ • Persistent Auth Session │
@@ -44,13 +44,24 @@ The agent ingests web pages, academic papers, and reading materials, optimizes t
 
 - **Hardware Tailored**: Native resolution scaling for Quaderno A4 (1650 × 2200, 207 DPI) and A5 (1404 × 1872, 227 DPI).
 - **Intelligent Margin Trimming**: Detects content bounding box and trims excess academic paper margins for maximum text readability.
-- **Ultra-Fast Wireless Push**: Deflates and compresses PDF streams down to <300 KB for near-instant Bluetooth PAN transfer.
-- **Network Auto-Routing**: Automatically discovers and fails over across Wi-Fi (`digitalpaper.local` or static IP), Bluetooth PAN (`bnep0`/`en*`), and USB tethering (`172.25.47.1`).
+- **Ultra-Fast Wireless Push**: Deflates and compresses PDF streams down to <300 KB for near-instant wireless transfer.
+- **Network Auto-Routing**: Automatically discovers and fails over across local Wi-Fi (`digitalpaper.local` or static IP), Quaderno Wi-Fi Access Point / SoftAP (`192.168.43.1` / dynamic gateway), and USB tethering (`172.25.47.1`).
 - **Autonomous Agent & Summarizer**: Synthesizes structured 1–5 page executive briefs from text/URLs directly into high-contrast E-ink layouts via Google Gemini Notebook (formerly NotebookLM, *WIP / Experimental*) or Gemini AI API.
 - **Google Gemini Notebook Integration (WIP)**: Automates source ingestion, grounding synthesis, and summary extraction using ephemeral or shared Gemini Notebooks.
 - **1-Click Triggers**: Browser bookmarklet, Chrome extension (Manifest V3), and Raycast script commands for desktop workflows.
 
 ---
+
+## Connection Methods
+
+| Method | Protocol / IP | Best For | Details |
+|---|---|---|---|
+| 🌐 **Shared Wi-Fi** *(Recommended)* | `digitalpaper.local` or DHCP IP | Everyday home / office use | Connect both Mac and Quaderno to your standard Wi-Fi network. Mac keeps full internet access while syncing in the background. |
+| 📡 **Wi-Fi Access Point (SoftAP)** | `192.168.43.1` / Default Gateway | Traveling / offline without a router | Turn on **Wi-Fi Access Point** in Quaderno settings. Join the Quaderno's Wi-Fi network from your Mac; the companion auto-discovers the gateway. |
+| 🔌 **USB-C Cable** | `172.25.47.1` (CDC-NCM / RNDIS) | Fast sync & large batches | Instantaneous, zero network configuration required. Plug in via USB-C and sync immediately while charging. |
+
+> [!NOTE]
+> **macOS & Bluetooth**: On modern macOS, Apple has removed kernel support for the legacy **Bluetooth PAN (BNEP)** network profile. While macOS will successfully pair with the Quaderno at the hardware Bluetooth layer (`FMVDP41_...`), macOS will not route TCP/IP traffic over Bluetooth. For wireless operation on Mac, use **Shared Wi-Fi** or the **Quaderno Wi-Fi Access Point**.
 
 ## Quickstart
 

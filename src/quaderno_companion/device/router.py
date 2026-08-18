@@ -1,22 +1,25 @@
 """Network Auto-Routing and Interface Probe for Fujitsu Quaderno Gen 2.
 
 Handles automatic discovery and failover across:
-1. Wi-Fi (Configured static IP or mDNS hostname `digitalpaper.local`)
-2. Bluetooth PAN (Network interface gateway `192.168.128.1` / `bnep0` / `en*`)
-3. USB Tethering (`172.25.47.1`)
+1. Wi-Fi (Configured static IP, dynamic gateway, or mDNS hostname `digitalpaper.local`)
+2. Wi-Fi Access Point / SoftAP (`192.168.43.1` or default gateway)
+3. Bluetooth PAN (Network interface gateway `192.168.128.1` / `bnep0` / `en*`)
+4. USB Tethering (`172.25.47.1`)
 """
 
 import asyncio
 import logging
+import re
 import socket
+import subprocess
 from dataclasses import dataclass
-from typing import List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Set, Tuple
 
 from quaderno_companion.config import settings
 
 logger = logging.getLogger(__name__)
 
-ConnectionType = Literal["wifi", "bluetooth_pan", "usb", "unknown"]
+ConnectionType = Literal["wifi", "wifi_ap", "bluetooth_pan", "usb", "unknown"]
 
 
 @dataclass
@@ -56,7 +59,18 @@ class NetworkRouter:
                     )
                     return candidate
 
-            logger.warning("No active network route to Quaderno found across Wi-Fi, Bluetooth PAN, or USB.")
+            # If standard candidates fail, try a quick subnet probe
+            subnet_candidate = await self._probe_local_subnet()
+            if subnet_candidate:
+                subnet_candidate.is_reachable = True
+                self._cached_route = subnet_candidate
+                logger.info(
+                    f"Discovered Quaderno via subnet scan ({subnet_candidate.connection_type.upper()}) "
+                    f"at {subnet_candidate.host}:{subnet_candidate.port}"
+                )
+                return subnet_candidate
+
+            logger.warning("No active network route to Quaderno found across Wi-Fi, Wi-Fi AP, Bluetooth PAN, or USB.")
             return None
 
     def get_active_route_sync(self, force_refresh: bool = False) -> Optional[DeviceRoute]:
@@ -77,58 +91,105 @@ class NetworkRouter:
                 )
                 return candidate
 
-        logger.warning("No active network route to Quaderno found across Wi-Fi, Bluetooth PAN, or USB.")
+        logger.warning("No active network route to Quaderno found across Wi-Fi, Wi-Fi AP, Bluetooth PAN, or USB.")
         return None
 
     def invalidate_cache(self) -> None:
         """Mark cached route as stale."""
         self._cached_route = None
 
+    def _get_default_gateways(self) -> List[str]:
+        """Retrieve default gateway IPs from system routing table."""
+        gateways = []
+        try:
+            out = subprocess.check_output(
+                ["netstat", "-nr", "-f", "inet"],
+                text=True,
+                timeout=1.0,
+                stderr=subprocess.DEVNULL,
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "default":
+                    gw = parts[1]
+                    if re.match(r"^\d+\.\d+\.\d+\.\d+$", gw) and gw != "127.0.0.1":
+                        gateways.append(gw)
+        except Exception:
+            pass
+        return gateways
+
     def _build_candidate_list(self) -> List[DeviceRoute]:
         """Construct prioritized list of candidate endpoints."""
         candidates = []
+        seen_hosts: Set[str] = set()
+
+        def add_candidate(host: Optional[str], conn_type: ConnectionType):
+            if host and host not in seen_hosts:
+                seen_hosts.add(host)
+                candidates.append(
+                    DeviceRoute(
+                        host=host,
+                        port=settings.device_port,
+                        connection_type=conn_type,
+                    )
+                )
 
         # 1. Configured static IP (if provided)
-        if settings.device_ip:
-            candidates.append(
-                DeviceRoute(
-                    host=settings.device_ip,
-                    port=settings.device_port,
-                    connection_type="wifi",
-                )
-            )
+        add_candidate(settings.device_ip, "wifi")
 
-        # 2. mDNS hostname on Wi-Fi
-        if settings.device_wifi_host:
-            candidates.append(
-                DeviceRoute(
-                    host=settings.device_wifi_host,
-                    port=settings.device_port,
-                    connection_type="wifi",
-                )
-            )
+        # 2. Dynamic Default Gateway (When connected directly to Quaderno AP or hotspot)
+        for gw in self._get_default_gateways():
+            add_candidate(gw, "wifi_ap")
 
-        # 3. Bluetooth PAN interface / gateway
-        if settings.device_bluetooth_gateway:
-            candidates.append(
-                DeviceRoute(
-                    host=settings.device_bluetooth_gateway,
-                    port=settings.device_port,
-                    connection_type="bluetooth_pan",
-                )
-            )
+        # 3. Standard Android SoftAP / Wi-Fi Access Point gateway
+        if hasattr(settings, "device_ap_ip") and settings.device_ap_ip:
+            add_candidate(settings.device_ap_ip, "wifi_ap")
 
-        # 4. USB Interface
-        if settings.device_usb_ip:
-            candidates.append(
-                DeviceRoute(
-                    host=settings.device_usb_ip,
-                    port=settings.device_port,
-                    connection_type="usb",
-                )
-            )
+        # 4. mDNS hostname on Wi-Fi
+        add_candidate(settings.device_wifi_host, "wifi")
+
+        # 5. Bluetooth PAN interface / gateway
+        add_candidate(settings.device_bluetooth_gateway, "bluetooth_pan")
+
+        # 6. USB Interface
+        add_candidate(settings.device_usb_ip, "usb")
 
         return candidates
+
+    async def _probe_local_subnet(self) -> Optional[DeviceRoute]:
+        """Perform a rapid parallel probe across the local /24 subnet on device_port."""
+        try:
+            # Determine local IP by creating a dummy UDP socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+
+            parts = local_ip.split(".")
+            if len(parts) != 4 or not (local_ip.startswith("192.168.") or local_ip.startswith("10.") or local_ip.startswith("172.")):
+                return None
+
+            subnet_prefix = f"{parts[0]}.{parts[1]}.{parts[2]}."
+
+            async def probe_ip(ip: str) -> Optional[str]:
+                if ip == local_ip:
+                    return None
+                if await self._probe_endpoint(ip, settings.device_port, timeout=0.35):
+                    return ip
+                return None
+
+            tasks = [probe_ip(f"{subnet_prefix}{i}") for i in range(1, 255)]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, str):
+                    return DeviceRoute(
+                        host=res,
+                        port=settings.device_port,
+                        connection_type="wifi",
+                    )
+        except Exception:
+            pass
+        return None
 
     def _probe_endpoint_sync(self, host: str, port: int, timeout: float = 1.0) -> bool:
         """Synchronously probe TCP connection to host:port."""

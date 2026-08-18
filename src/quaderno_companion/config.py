@@ -52,6 +52,10 @@ class Settings(BaseSettings):
         default="digitalpaper.local",
         description="mDNS or hostname for Quaderno on local Wi-Fi.",
     )
+    device_ap_ip: str = Field(
+        default="192.168.43.1",
+        description="Default gateway IP for Quaderno Wi-Fi Access Point / SoftAP.",
+    )
     device_bluetooth_gateway: str = Field(
         default="192.168.128.1",
         description="Default gateway IP for Bluetooth PAN (bnep0/en*).",

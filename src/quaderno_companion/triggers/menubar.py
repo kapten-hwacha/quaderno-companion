@@ -277,6 +277,37 @@ class QuadernoMenubarApp(rumps.App):
             self.summary_slider_item = rumps.MenuItem("📝 Summary: Off")
             self.summary_slider_item._menuitem.setView_(summary_container)
 
+            # Native NSSegmentedControl for Summarizer Engine (⚡ Gemini API vs 📚 NotebookLM)
+            class _ProviderSegmentHandler(AppKit.NSObject):
+                def initWithApp_(self, app_inst):
+                    self = objc.super(_ProviderSegmentHandler, self).init()
+                    if self is not None:
+                        self.app = app_inst
+                    return self
+
+                def handleSegment_(self, sender):
+                    idx = sender.selectedSegment()
+                    if idx == 0:
+                        self.app.summarizer_provider = "gemini_api"
+                    elif idx == 1:
+                        self.app.summarizer_provider = "gemini_notebook"
+
+            self._provider_handler = _ProviderSegmentHandler.alloc().initWithApp_(self)
+            self.provider_segment = AppKit.NSSegmentedControl.alloc().initWithFrame_(AppKit.NSMakeRect(18, 2, 192, 22))
+            self.provider_segment.setSegmentCount_(2)
+            self.provider_segment.setLabel_forSegment_("⚡ Gemini API", 0)
+            self.provider_segment.setLabel_forSegment_("📚 NotebookLM", 1)
+            self.provider_segment.setTrackingMode_(AppKit.NSSegmentSwitchTrackingSelectOne)
+            self.provider_segment.setTarget_(self._provider_handler)
+            self.provider_segment.setAction_(objc.selector(self._provider_handler.handleSegment_, signature=b"v@:@"))
+            initial_idx = 1 if (settings.summarizer_provider or "").lower() in ("gemini_notebook", "notebooklm") else 0
+            self.provider_segment.setSelectedSegment_(initial_idx)
+
+            prov_container = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 228, 26))
+            prov_container.addSubview_(self.provider_segment)
+            self.provider_segment_item = rumps.MenuItem("")
+            self.provider_segment_item._menuitem.setView_(prov_container)
+
             # Native NSSwitch Checkbox / Toggle Mode Rows (Won't dismiss menu when toggled)
             class _ToggleSwitchHandler(AppKit.NSObject):
                 def initWithApp_key_(self, app_inst, key_name):
@@ -352,6 +383,9 @@ class QuadernoMenubarApp(rumps.App):
             self.summary_slider_item = rumps.MenuItem("📝 Summary: Off", callback=self.cycle_summary_pages)
             self.summary_slider = None
             self.summary_badge = None
+            init_prov_label = "⚡ Gemini API" if settings.summarizer_provider == "gemini_api" else "📚 NotebookLM"
+            self.provider_segment_item = rumps.MenuItem(f"Engine: {init_prov_label}", callback=self.toggle_summarizer_provider)
+            self.provider_segment = None
             self.watch_mode_item = rumps.MenuItem("🪞 Preview Mirror", callback=self.toggle_watch_mode)
             self.watch_mode_item.state = False
             self.watch_switch = None
@@ -365,6 +399,7 @@ class QuadernoMenubarApp(rumps.App):
         self.open_folder_item = rumps.MenuItem("📁 Open Quaderno Folder", callback=self.open_quaderno_folder)
 
         self._summary_pages: int = 0
+        self._summarizer_provider: str = settings.summarizer_provider or "gemini_api"
         self._last_user_nav_time: float = 0.0
         self._last_reading_state = None
         self._last_synced_doc: Optional[str] = None
@@ -379,6 +414,7 @@ class QuadernoMenubarApp(rumps.App):
             self.chapters_menu,
             None,  # Separator
             self.summary_slider_item,
+            self.provider_segment_item,
             self.watch_mode_item,
             self.sync_now_item,
             self.open_folder_item,
@@ -439,6 +475,37 @@ class QuadernoMenubarApp(rumps.App):
         cur = self.summary_pages
         nxt = (cur + 1) if cur < 5 else 0
         self.summary_pages = nxt
+
+    @property
+    def summarizer_provider(self) -> str:
+        """Get active summarizer provider ('gemini_api' or 'gemini_notebook')."""
+        if hasattr(self, "provider_segment") and self.provider_segment is not None:
+            try:
+                idx = self.provider_segment.selectedSegment()
+                return "gemini_notebook" if idx == 1 else "gemini_api"
+            except Exception:
+                pass
+        return getattr(self, "_summarizer_provider", settings.summarizer_provider or "gemini_api")
+
+    @summarizer_provider.setter
+    def summarizer_provider(self, val: str):
+        target = "gemini_notebook" if "notebook" in str(val).lower() else "gemini_api"
+        self._summarizer_provider = target
+        settings.summarizer_provider = target
+        if hasattr(self, "provider_segment") and self.provider_segment is not None:
+            try:
+                idx = 1 if target == "gemini_notebook" else 0
+                self.provider_segment.setSelectedSegment_(idx)
+            except Exception:
+                pass
+        if hasattr(self, "provider_segment_item") and self.provider_segment_item is not None:
+            label = "⚡ Gemini API" if target == "gemini_api" else "📚 NotebookLM"
+            self.provider_segment_item.title = f"Engine: {label}"
+
+    def toggle_summarizer_provider(self, sender=None):
+        """Toggle between gemini_api and gemini_notebook in fallback mode."""
+        nxt = "gemini_notebook" if self.summarizer_provider == "gemini_api" else "gemini_api"
+        self.summarizer_provider = nxt
 
     def trigger_sync_now(self, _):
         """Run an immediate background folder sync pass."""
@@ -647,10 +714,12 @@ class QuadernoMenubarApp(rumps.App):
         threading.Thread(target=_fetch, daemon=True).start()
 
     def _execute_push_or_summarize(self, target: str, title: Optional[str] = None, page: int = 1):
-        """Execute push or summarize based on summary_pages slider setting."""
+        """Execute push or summarize based on summary_pages slider and summarizer_provider settings."""
         pages = self.summary_pages
         is_summary = pages > 0
-        action_verb = f"Summarizing ({pages} pg{'s' if pages > 1 else ''})..." if is_summary else "Ingesting..."
+        provider = self.summarizer_provider
+        prov_label = "API" if provider == "gemini_api" else "NotebookLM"
+        action_verb = f"Summarizing ({pages} pg{'s' if pages > 1 else ''} via {prov_label})..." if is_summary else "Ingesting..."
         success_title = "Summary Pushed" if is_summary else "Pushed to Device"
 
         def _worker():
@@ -661,7 +730,12 @@ class QuadernoMenubarApp(rumps.App):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 if is_summary:
-                    res = loop.run_until_complete(agent.summarize_and_push(text_or_url=target, title=title, pages=pages))
+                    res = loop.run_until_complete(agent.summarize_and_push(
+                        text_or_url=target,
+                        title=title,
+                        pages=pages,
+                        provider=provider,
+                    ))
                 else:
                     res = loop.run_until_complete(tool_push_document(source_url_or_path=target, title=title, page=page))
 
