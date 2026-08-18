@@ -455,6 +455,10 @@ class QuadernoClient:
 
         return await asyncio.to_thread(_resolve)
 
+    async def download_document_async(self, document_id_or_path: str) -> bytes:
+        """Download raw PDF document bytes asynchronously."""
+        return await asyncio.to_thread(self.download_document, document_id_or_path)
+
     async def get_battery_status(self) -> Dict[str, Any]:
         """Fetch battery level and charging state."""
         if not self._is_authenticated:

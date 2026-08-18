@@ -352,3 +352,88 @@ async def test_device_manager_open_document():
             document_id="doc-uploaded-456",
             page=1,  # PDF length fallback is 1 without valid pypdf pages
         )
+
+
+@pytest.mark.asyncio
+async def test_get_toc_in_memory_cache():
+    """Verify get_toc returns immediately from in-memory cache."""
+    mgr = QuadernoDeviceManager()
+    mgr._doc_toc_cache["doc-toc-1"] = [("Chapter 1", 1), ("Chapter 2", 15)]
+
+    toc = await mgr.get_toc("doc-toc-1")
+    assert toc == [("Chapter 1", 1), ("Chapter 2", 15)]
+
+
+@pytest.mark.asyncio
+async def test_get_toc_persisted_disk_cache(tmp_path):
+    """Verify get_toc loads cached TOC from disk when in-memory cache is empty."""
+    import json
+    from quaderno_companion.config import settings
+
+    toc_file = tmp_path / "toc_cache.json"
+    toc_data = {"doc-persisted-1": [["Section 1", 1], ["Section 2", 10]]}
+    toc_file.write_text(json.dumps(toc_data))
+
+    mgr = QuadernoDeviceManager()
+    mgr._doc_toc_cache.clear()
+
+    with patch.object(type(settings), "toc_cache_path", new_callable=PropertyMock, return_value=toc_file):
+        toc = await mgr.get_toc("doc-persisted-1")
+        assert toc == [("Section 1", 1), ("Section 2", 10)]
+        assert "doc-persisted-1" in mgr._doc_toc_cache
+
+
+@pytest.mark.asyncio
+async def test_get_toc_fetches_from_device_and_caches(tmp_path):
+    """Verify get_toc downloads document from device, parses TOC, and writes to disk cache."""
+    from quaderno_companion.config import settings
+
+    toc_file = tmp_path / "toc_cache.json"
+
+    mgr = QuadernoDeviceManager()
+    mgr._doc_toc_cache.clear()
+
+    mock_client = MagicMock()
+    mock_client.download_document_async = AsyncMock(return_value=b"%PDF-1.4 mock")
+
+    with patch.object(type(settings), "toc_cache_path", new_callable=PropertyMock, return_value=toc_file), \
+         patch.object(mgr, "get_client", return_value=mock_client), \
+         patch("quaderno_companion.device.manager.extract_pdf_toc", return_value=[("Introduction", 1), ("Summary", 20)]):
+
+        toc = await mgr.get_toc("doc-remote-1")
+        assert toc == [("Introduction", 1), ("Summary", 20)]
+        assert mgr._doc_toc_cache.get("doc-remote-1") == [("Introduction", 1), ("Summary", 20)]
+        assert toc_file.exists()
+
+
+def test_extract_pdf_toc():
+    """Verify extract_pdf_toc correctly extracts outlines from PDF bytes."""
+    import pymupdf as fitz
+    from quaderno_companion.device.manager import extract_pdf_toc
+
+    # 1. Test empty bytes
+    assert extract_pdf_toc(b"") == []
+    assert extract_pdf_toc(b"not a pdf") == []
+
+    # 2. Create in-memory PDF with TOC bookmarks using PyMuPDF
+    doc = fitz.open()
+    doc.new_page()  # Page 1
+    doc.new_page()  # Page 2
+    doc.new_page()  # Page 3
+
+    # TOC format in PyMuPDF: [ [lvl, title, page_1_indexed, ...] ]
+    toc_in = [
+        [1, "Chapter 1: Intro", 1],
+        [1, "Chapter 2: Methods", 2],
+        [2, "Subsection 2.1", 3],
+    ]
+    doc.set_toc(toc_in)
+    pdf_bytes = doc.tobytes()
+    doc.close()
+
+    toc_out = extract_pdf_toc(pdf_bytes)
+    assert len(toc_out) == 3
+    assert toc_out[0] == ("Chapter 1: Intro", 1)
+    assert toc_out[1] == ("Chapter 2: Methods", 2)
+    assert toc_out[2] == ("Subsection 2.1", 3)
+

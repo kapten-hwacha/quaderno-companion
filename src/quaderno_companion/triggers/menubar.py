@@ -464,7 +464,7 @@ class QuadernoMenubarApp(AppBase):
         # Dropdown Submenu to Jump Between Chapters
         self.chapters_menu = rumps.MenuItem("📑 Jump to Chapter")
         self.chapters_menu.add(rumps.MenuItem("No active document"))
-        self._last_loaded_toc_doc_id: Optional[str] = None
+        self._last_loaded_toc_sig = None
 
         self.sync_now_item = rumps.MenuItem("🔄 Sync Now", callback=self.trigger_sync_now)
         self.open_folder_item = rumps.MenuItem("📁 Open Quaderno Folder", callback=self.open_quaderno_folder)
@@ -688,6 +688,14 @@ class QuadernoMenubarApp(AppBase):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 status = loop.run_until_complete(device_manager.get_status())
+                toc = []
+                if status.is_connected and status.reading_state and status.reading_state.document_id:
+                    doc_id = status.reading_state.document_id
+                    try:
+                        toc = loop.run_until_complete(device_manager.get_toc(doc_id))
+                    except Exception as toc_err:
+                        logger.debug(f"Could not load TOC during telemetry refresh: {toc_err}")
+                        toc = getattr(device_manager, "_doc_toc_cache", {}).get(doc_id, [])
                 loop.close()
 
                 def _apply_ui():
@@ -730,14 +738,13 @@ class QuadernoMenubarApp(AppBase):
 
                             # Dynamically populate Chapters Dropdown Submenu immediately
                             doc_id = status.reading_state.document_id
-                            if doc_id and doc_id != getattr(self, "_last_loaded_toc_doc_id", None):
-                                self._last_loaded_toc_doc_id = doc_id
-                                tot_p_val = max(1, status.reading_state.total_pages)
-                                toc = getattr(device_manager, "_doc_toc_cache", {}).get(doc_id, [])
-
+                            tot_p_val = max(1, status.reading_state.total_pages)
+                            toc_sig = (doc_id, len(toc) if toc else 0)
+                            if doc_id and toc_sig != getattr(self, "_last_loaded_toc_sig", None):
+                                self._last_loaded_toc_sig = toc_sig
                                 self.chapters_menu.clear()
                                 if toc:
-                                    for ch_title, ch_page in toc[:30]:
+                                    for ch_title, ch_page in toc[:40]:
                                         lbl = f"📑 {ch_title[:32]} (p. {ch_page})"
                                         def _make_jump(p):
                                             return lambda _: self._async_nav("goto", page=p)
@@ -766,14 +773,18 @@ class QuadernoMenubarApp(AppBase):
                                 self.page_slider.setEnabled_(False)
                                 if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
                                     self.slider_page_badge.setStringValue_("p. - / -")
-                            if getattr(self, "_last_loaded_toc_doc_id", None) is not None:
-                                self._last_loaded_toc_doc_id = None
+                            if getattr(self, "_last_loaded_toc_sig", None) is not None:
+                                self._last_loaded_toc_sig = None
                                 self.chapters_menu.clear()
                                 self.chapters_menu.add(rumps.MenuItem("No active document"))
                     else:
                         self.title = "📖 (offline)"
                         self.status_item.title = "✗ Disconnected"
                         self.doc_item.title = "Device Offline"
+                        if getattr(self, "_last_loaded_toc_sig", None) is not None:
+                            self._last_loaded_toc_sig = None
+                            self.chapters_menu.clear()
+                            self.chapters_menu.add(rumps.MenuItem("No active document"))
 
                 self._dispatch_to_main(_apply_ui)
 

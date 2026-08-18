@@ -179,6 +179,10 @@ class Settings(BaseSettings):
         return self.config_dir / self.sync_state_file
 
     @property
+    def toc_cache_path(self) -> Path:
+        return self.config_dir / "toc_cache.json"
+
+    @property
     def active_screen_profile(self) -> ScreenProfile:
         return SCREEN_PROFILES.get(self.default_profile, SCREEN_PROFILES["A4"])
 

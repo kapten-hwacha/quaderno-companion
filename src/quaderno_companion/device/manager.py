@@ -75,6 +75,56 @@ class DeviceStatus:
     reading_state: ReadingState = field(default_factory=ReadingState)
 
 
+def extract_pdf_toc(pdf_bytes: bytes) -> List[Tuple[str, int]]:
+    """Extract Table of Contents bookmarks/outlines from PDF bytes."""
+    if not pdf_bytes:
+        return []
+    
+    # 1. Primary: Use PyMuPDF (fitz)
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        toc = doc.get_toc()
+        doc.close()
+        if toc:
+            entries = []
+            for item in toc:
+                if len(item) >= 3:
+                    title = str(item[1]).strip()
+                    page = int(item[2])
+                    if title and page >= 1:
+                        entries.append((title, page))
+            if entries:
+                return entries
+    except Exception as e:
+        logger.debug(f"PyMuPDF could not extract TOC from PDF: {e}")
+
+    # 2. Fallback: pypdf if available
+    try:
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        if reader.outline:
+            def _parse_outlines(outlines):
+                entries = []
+                for item in outlines:
+                    if isinstance(item, list):
+                        entries.extend(_parse_outlines(item))
+                    elif hasattr(item, "title"):
+                        try:
+                            p_num = reader.get_destination_page_number(item) + 1
+                            title = str(item.title).strip()
+                            if title and p_num >= 1:
+                                entries.append((title, int(p_num)))
+                        except Exception:
+                            pass
+                return entries
+            return _parse_outlines(reader.outline)
+    except Exception:
+        pass
+
+    return []
+
+
 class QuadernoDeviceManager:
     """High-level singleton manager for the Quaderno companion bridge."""
 
@@ -87,6 +137,7 @@ class QuadernoDeviceManager:
         self._last_pushed_doc_id: Optional[str] = None
         self._last_pushed_time: float = 0.0
         self._load_persisted_state()
+        self._load_persisted_toc_cache()
         # Re-entrant thread lock protects client resolution and route caching across all threads/event loops
         self._sync_lock = threading.RLock()
 
@@ -106,6 +157,33 @@ class QuadernoDeviceManager:
                     )
         except Exception:
             pass
+
+    def _load_persisted_toc_cache(self):
+        """Load persisted TOC cache from disk."""
+        try:
+            if settings.toc_cache_path.exists():
+                data = json.loads(settings.toc_cache_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if isinstance(v, list):
+                            self._doc_toc_cache[k] = [(str(item[0]), int(item[1])) for item in v if len(item) >= 2]
+        except Exception as e:
+            logger.debug(f"Could not load persisted TOC cache: {e}")
+
+    def _save_persisted_toc(self, doc_id: str, toc: List[Tuple[str, int]]):
+        """Save a document's TOC to the persisted disk cache."""
+        try:
+            settings.ensure_directories()
+            data = {}
+            if settings.toc_cache_path.exists():
+                try:
+                    data = json.loads(settings.toc_cache_path.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            data[doc_id] = [[title, page] for title, page in toc]
+            settings.toc_cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.debug(f"Could not save persisted TOC cache: {e}")
 
     def _save_persisted_state(self):
         """Save current reading state to disk for cross-process sync."""
@@ -211,25 +289,10 @@ class QuadernoDeviceManager:
         total_pages = 1
         raw_toc = []
         try:
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(pdf_bytes))
-            total_pages = max(1, len(reader.pages))
-
-            def _parse_outlines(outlines):
-                entries = []
-                for item in outlines:
-                    if isinstance(item, list):
-                        entries.extend(_parse_outlines(item))
-                    elif hasattr(item, "title"):
-                        try:
-                            p_num = reader.get_destination_page_number(item) + 1
-                            entries.append((str(item.title).strip(), int(p_num)))
-                        except Exception:
-                            pass
-                return entries
-
-            if reader.outline:
-                raw_toc = _parse_outlines(reader.outline)
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            total_pages = max(1, doc.page_count)
+            doc.close()
+            raw_toc = extract_pdf_toc(pdf_bytes)
         except Exception as e:
             logger.debug(f"Could not inspect PDF metadata: {e}")
 
@@ -260,6 +323,7 @@ class QuadernoDeviceManager:
 
         if raw_toc:
             self._doc_toc_cache[doc_id] = raw_toc
+            self._save_persisted_toc(doc_id, raw_toc)
 
         logger.info(
             f"Successfully pushed and displayed '{doc_title}' (Page {target_page}/{total_pages}) on Quaderno"
@@ -283,12 +347,26 @@ class QuadernoDeviceManager:
         if target_id in self._doc_toc_cache:
             return self._doc_toc_cache[target_id]
 
-        client = await self.get_client()
-        remote_path = self._reading_state.remote_path if target_id == self._reading_state.document_id else None
-        toc = await client.get_document_toc(document_id=target_id, remote_path=remote_path)
-        if toc:
-            self._doc_toc_cache[target_id] = toc
-        return toc
+        self._load_persisted_toc_cache()
+        if target_id in self._doc_toc_cache:
+            return self._doc_toc_cache[target_id]
+
+        try:
+            client = await self.get_client()
+            remote_path = self._reading_state.remote_path if target_id == self._reading_state.document_id else None
+            lookup_target = target_id or remote_path
+            if lookup_target:
+                pdf_bytes = await client.download_document_async(lookup_target)
+                if pdf_bytes:
+                    toc = extract_pdf_toc(pdf_bytes)
+                    if toc:
+                        self._doc_toc_cache[target_id] = toc
+                        self._save_persisted_toc(target_id, toc)
+                        return toc
+        except Exception as e:
+            logger.debug(f"Could not fetch document TOC for {target_id}: {e}")
+
+        return []
 
     async def navigate(self, action: NavAction, page: Optional[int] = None) -> NavigateResult:
         """Send navigation commands to Quaderno document viewer.

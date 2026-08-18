@@ -181,3 +181,75 @@ def test_menubar_instant_page_navigation():
         assert "Sample Document (6/10)" in app.doc_item.title
 
 
+def test_menubar_chapters_menu_with_toc():
+    """Verify refresh_telemetry populates chapters_menu from device_manager.get_toc."""
+    import time
+    from quaderno_companion.device.manager import DeviceStatus, ReadingState
+
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    status = DeviceStatus(
+        is_connected=True,
+        battery_level=85,
+        reading_state=ReadingState(
+            document_id="doc-with-chapters",
+            title="Book with TOC",
+            current_page=3,
+            total_pages=50,
+        ),
+    )
+
+    mock_toc = [("Chapter 1: Begin", 1), ("Chapter 2: Middle", 25), ("Chapter 3: End", 45)]
+
+    with patch.object(app, "_dispatch_to_main", side_effect=lambda f: f()), \
+         patch("quaderno_companion.triggers.menubar.device_manager.get_status", new_callable=AsyncMock, return_value=status), \
+         patch("quaderno_companion.triggers.menubar.device_manager.get_toc", new_callable=AsyncMock, return_value=mock_toc):
+
+        app.refresh_telemetry()
+        time.sleep(0.15)
+
+        # Check menu items in chapters_menu
+        items = list(app.chapters_menu.values())
+        item_titles = [it.title for it in items]
+
+        assert any("Chapter 1: Begin" in t for t in item_titles)
+        assert any("Chapter 2: Middle" in t for t in item_titles)
+        assert any("Chapter 3: End" in t for t in item_titles)
+
+
+def test_menubar_chapters_menu_landmark_fallback():
+    """Verify refresh_telemetry falls back to landmarks when TOC is empty on multi-page doc."""
+    import time
+    from quaderno_companion.device.manager import DeviceStatus, ReadingState
+
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    status = DeviceStatus(
+        is_connected=True,
+        battery_level=85,
+        reading_state=ReadingState(
+            document_id="doc-no-toc",
+            title="Paper without TOC",
+            current_page=1,
+            total_pages=20,
+        ),
+    )
+
+    with patch.object(app, "_dispatch_to_main", side_effect=lambda f: f()), \
+         patch("quaderno_companion.triggers.menubar.device_manager.get_status", new_callable=AsyncMock, return_value=status), \
+         patch("quaderno_companion.triggers.menubar.device_manager.get_toc", new_callable=AsyncMock, return_value=[]):
+
+        app.refresh_telemetry()
+        time.sleep(0.15)
+
+        items = list(app.chapters_menu.values())
+        item_titles = [it.title for it in items]
+
+        assert any("Start of Document" in t for t in item_titles)
+        assert any("50% (Halfway)" in t for t in item_titles)
+        assert any("End of Document" in t for t in item_titles)
+
+
+
