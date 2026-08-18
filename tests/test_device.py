@@ -108,6 +108,7 @@ async def test_concurrent_get_client_calls_serialize():
 
     with patch.object(QuadernoDeviceManager, "is_paired", new_callable=PropertyMock, return_value=True), \
          patch.object(NetworkRouter, "get_active_route_sync", return_value=mock_route), \
+         patch.object(NetworkRouter, "_probe_endpoint_sync", return_value=True), \
          patch.object(QuadernoClient, "authenticate_sync", mock_auth_sync):
 
         # Launch 5 concurrent calls across thread pool and event loop
@@ -181,3 +182,173 @@ def test_perform_auth_raises_on_persistent_401():
 
         assert "HTTP 401" in str(exc_info.value)
         assert mock_dp._get_nonce.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_status_fast_disconnect_detection():
+    """Verify that get_status returns is_connected=False and clears client cache when device is offline."""
+    from quaderno_companion.device.client import DeviceNotConnectedError
+
+    mgr = QuadernoDeviceManager()
+    mock_client = MagicMock()
+    mock_client.get_battery_status = AsyncMock(side_effect=DeviceNotConnectedError("Connection timed out"))
+    mock_client.get_storage_status = AsyncMock(side_effect=DeviceNotConnectedError("Connection timed out"))
+    mock_client.get_recent_document = AsyncMock(side_effect=DeviceNotConnectedError("Connection timed out"))
+
+    with patch.object(QuadernoDeviceManager, "is_paired", new_callable=PropertyMock, return_value=True), \
+         patch.object(mgr, "get_client", return_value=mock_client):
+        mgr._client = mock_client
+        mgr._current_route = DeviceRoute(host="192.168.1.100", port=8443, connection_type="wifi", is_reachable=True)
+
+        status = await mgr.get_status()
+        assert status.is_connected is False
+        assert mgr._client is None
+        assert mgr._current_route is None
+
+
+def test_get_client_sync_invalidates_stale_route():
+    """Verify get_client_sync invalidates cached client when socket probe on current route fails."""
+    mgr = QuadernoDeviceManager()
+    stale_client = MagicMock()
+    stale_client.is_authenticated = True
+    mgr._client = stale_client
+    mgr._current_route = DeviceRoute(host="192.168.1.100", port=8443, connection_type="wifi", is_reachable=True)
+
+    fresh_route = DeviceRoute(host="192.168.128.1", port=8443, connection_type="bluetooth_pan", is_reachable=True)
+
+    with patch.object(QuadernoDeviceManager, "is_paired", new_callable=PropertyMock, return_value=True), \
+         patch.object(mgr.router, "_probe_endpoint_sync", return_value=False), \
+         patch.object(mgr.router, "get_active_route_sync", return_value=fresh_route), \
+         patch.object(QuadernoClient, "authenticate_sync", return_value=True):
+
+        client = mgr.get_client_sync()
+        assert client is not stale_client
+        assert mgr._current_route == fresh_route
+
+
+def test_client_run_with_reauth_fails_fast_on_network_error():
+    """Verify _run_with_reauth raises DeviceNotConnectedError immediately on network timeout without re-auth."""
+    from quaderno_companion.device.client import DeviceNotConnectedError
+
+    client = QuadernoClient(host="192.168.1.100")
+    client._is_authenticated = True
+
+    def failing_call():
+        raise TimeoutError("Connection timed out (Read timed out)")
+
+    with patch.object(client, "authenticate_sync") as mock_auth:
+        with pytest.raises(DeviceNotConnectedError) as exc_info:
+            client._run_with_reauth(failing_call)
+
+        assert "connection lost" in str(exc_info.value).lower()
+        mock_auth.assert_not_called()
+        assert client._is_authenticated is False
+
+
+def test_router_subnet_scan_sync_finds_device():
+    """Verify that get_active_route_sync discovers device on local subnet when candidate list fails."""
+    router = NetworkRouter()
+
+    with patch.object(router, "_build_candidate_list", return_value=[]), \
+         patch.object(router, "_get_local_subnet_prefix", return_value=("192.168.1.50", "192.168.1.")), \
+         patch.object(router, "_probe_endpoint_sync", side_effect=lambda ip, port, timeout: ip == "192.168.1.120"), \
+         patch.object(router, "_verify_quaderno_endpoint_sync", side_effect=lambda ip, port: ip == "192.168.1.120"):
+
+        route = router.get_active_route_sync(force_refresh=True)
+        assert route is not None
+        assert route.host == "192.168.1.120"
+        assert route.connection_type == "wifi"
+
+
+@pytest.mark.asyncio
+async def test_get_client_async_reconnects_when_online():
+    """Verify that get_client discovers route and authenticates when device comes online."""
+    mgr = QuadernoDeviceManager()
+    mgr._client = None
+    mgr._current_route = None
+
+    discovered_route = DeviceRoute(host="192.168.1.77", port=8443, connection_type="wifi", is_reachable=True)
+
+    with patch.object(QuadernoDeviceManager, "is_paired", new_callable=PropertyMock, return_value=True), \
+         patch.object(mgr.router, "get_active_route_sync", return_value=discovered_route), \
+         patch.object(QuadernoClient, "authenticate_sync", return_value=True) as mock_auth:
+
+        client = await mgr.get_client()
+        assert client is not None
+        assert client.host == "192.168.1.77"
+        assert mgr._current_route == discovered_route
+        mock_auth.assert_called_once()
+
+
+def test_setup_logging(tmp_path):
+    """Verify setup_logging configures file handler and log formatting."""
+    import logging
+    from quaderno_companion.config import setup_logging, settings
+
+    test_log = tmp_path / "test_companion.log"
+    with patch.object(settings, "config_dir", tmp_path), \
+         patch.object(type(settings), "log_file", new_callable=PropertyMock, return_value=test_log):
+        
+        setup_logging(log_level="DEBUG", enable_file_logging=True, enable_console_logging=False)
+        test_logger = logging.getLogger("quaderno_companion.unit_test")
+        test_logger.info("Unit test log verification")
+
+        assert test_log.exists()
+        content = test_log.read_text(encoding="utf-8")
+        assert "Unit test log verification" in content
+        assert "[INFO]" in content
+
+
+@pytest.mark.asyncio
+async def test_client_upload_document_flexible_args():
+    """Verify upload_document accepts both pdf_bytes/pdf_data and remote_path/filename arguments."""
+    client = QuadernoClient(host="192.168.1.100")
+    client._is_authenticated = True
+
+    mock_dp = MagicMock()
+    with patch.object(client, "_ensure_dp_instance", return_value=mock_dp), \
+         patch.object(client, "_safe_dp_upload", return_value="doc-abc-123"):
+
+        # 1. Test with pdf_bytes and remote_path
+        doc_id_1 = await client.upload_document(
+            pdf_bytes=b"%PDF-1.4 test",
+            remote_path="Document/Companion/paper.pdf",
+        )
+        assert doc_id_1 == "doc-abc-123"
+
+        # 2. Test with pdf_data and remote_filename
+        doc_id_2 = await client.upload_document(
+            pdf_data=b"%PDF-1.4 test 2",
+            remote_filename="test.pdf",
+            remote_folder="Document/Folder",
+        )
+        assert doc_id_2 == "doc-abc-123"
+
+
+@pytest.mark.asyncio
+async def test_device_manager_open_document():
+    """Verify open_document successfully uploads PDF and invokes display_document."""
+    mgr = QuadernoDeviceManager()
+    mock_client = MagicMock()
+    mock_client.upload_document = AsyncMock(return_value="doc-uploaded-456")
+    mock_client.display_document = AsyncMock()
+
+    with patch.object(mgr, "get_client", return_value=mock_client):
+        res = await mgr.open_document(
+            pdf_bytes=b"%PDF-1.4 mock",
+            filename="document.pdf",
+            title="My Document",
+            page=2,
+        )
+
+        assert res["status"] == "success"
+        assert res["document_id"] == "doc-uploaded-456"
+        assert res["title"] == "My Document"
+        mock_client.upload_document.assert_called_once_with(
+            pdf_bytes=b"%PDF-1.4 mock",
+            remote_path="Document/Companion/document.pdf",
+        )
+        mock_client.display_document.assert_called_once_with(
+            document_id="doc-uploaded-456",
+            page=1,  # PDF length fallback is 1 without valid pypdf pages
+        )

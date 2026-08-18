@@ -9,6 +9,7 @@ Provides seamless system-wide desktop integration:
 """
 
 import asyncio
+import logging
 import subprocess
 import threading
 import webbrowser
@@ -17,6 +18,8 @@ from typing import Any, Literal, Optional
 
 import sys
 import uvicorn
+
+logger = logging.getLogger(__name__)
 
 rumps: Any
 AppKit: Any
@@ -504,8 +507,8 @@ class QuadernoMenubarApp(AppBase):
             rumps.MenuItem("Quit Quaderno Companion", callback=self.quit_app),
         ]
 
-        # Timer for polling device status and live sync (every 2 seconds)
-        self.timer = rumps.Timer(self.on_tick, 2)
+        # Timer for polling device status and live sync (every 10 seconds / 0.1 Hz)
+        self.timer = rumps.Timer(self.on_tick, settings.telemetry_poll_interval)
         self.timer.start()
 
     @property
@@ -651,12 +654,25 @@ class QuadernoMenubarApp(AppBase):
                     loop.close()
                     self._last_synced_doc = doc_path
                     self._last_synced_page = page_num
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error(f"Live preview sync error: {e}", exc_info=True)
             finally:
                 self._sync_in_progress = False
 
         threading.Thread(target=_sync_worker, daemon=True).start()
+
+    def _dispatch_to_main(self, fn):
+        """Safely execute a UI update callback on the AppKit main thread."""
+        if AppKit is not None:
+            try:
+                AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(fn)
+                return
+            except Exception:
+                pass
+        try:
+            fn()
+        except Exception:
+            pass
 
     def refresh_telemetry(self, _=None):
         """Update menubar title and telemetry items in background."""
@@ -671,32 +687,32 @@ class QuadernoMenubarApp(AppBase):
                 status = loop.run_until_complete(device_manager.get_status())
                 loop.close()
 
-                if status.is_connected:
-                    bat_str = f"{status.battery_level}%" if status.battery_level is not None else ""
-                    self.title = f"📖 {bat_str}".strip()
-                    self.status_item.title = f"✓ Connected ({status.connection_type})"
+                def _apply_ui():
+                    if status.is_connected:
+                        bat_str = f"{status.battery_level}%" if status.battery_level is not None else ""
+                        self.title = f"📖 {bat_str}".strip()
+                        self.status_item.title = f"✓ Connected ({status.connection_type})"
 
-                    bat_full = f"Battery: {status.battery_level}%" if status.battery_level is not None else "Battery: N/A"
-                    if status.battery_charging:
-                        bat_full += " ⚡"
-                    self.battery_item.title = bat_full
+                        bat_full = f"Battery: {status.battery_level}%" if status.battery_level is not None else "Battery: N/A"
+                        if status.battery_charging:
+                            bat_full += " ⚡"
+                        self.battery_item.title = bat_full
 
-                    if status.storage_free_mb:
-                        self.storage_item.title = f"Storage: {round(status.storage_free_mb/1024, 1)} GB free"
-                    
-                    if status.reading_state.title:
-                        import time
-                        self._last_reading_state = status.reading_state
-                        title_short = status.reading_state.title[:24] + ("..." if len(status.reading_state.title) > 24 else "")
-                        self.doc_item.title = f"📖 {title_short} ({status.reading_state.current_page}/{status.reading_state.total_pages})"
+                        if status.storage_free_mb:
+                            self.storage_item.title = f"Storage: {round(status.storage_free_mb/1024, 1)} GB free"
                         
-                        # Prevent background poller from pulling slider back during user scrubbing
-                        is_recent_nav = (time.time() - getattr(self, "_last_user_nav_time", 0.0)) < 3.0
-                        tot = max(1, status.reading_state.total_pages)
-                        cur = max(1, min(status.reading_state.current_page, tot))
+                        if status.reading_state.title:
+                            import time
+                            self._last_reading_state = status.reading_state
+                            title_short = status.reading_state.title[:24] + ("..." if len(status.reading_state.title) > 24 else "")
+                            self.doc_item.title = f"📖 {title_short} ({status.reading_state.current_page}/{status.reading_state.total_pages})"
+                            
+                            # Prevent background poller from pulling slider back during user scrubbing
+                            is_recent_nav = (time.time() - getattr(self, "_last_user_nav_time", 0.0)) < 3.0
+                            tot = max(1, status.reading_state.total_pages)
+                            cur = max(1, min(status.reading_state.current_page, tot))
 
-                        if hasattr(self, "page_slider") and self.page_slider is not None:
-                            def _update_slider():
+                            if hasattr(self, "page_slider") and self.page_slider is not None:
                                 self.page_slider.setMinValue_(1.0)
                                 self.page_slider.setMaxValue_(float(tot))
                                 self.page_slider.setNumberOfTickMarks_(0)
@@ -706,20 +722,14 @@ class QuadernoMenubarApp(AppBase):
                                     if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
                                         self.slider_page_badge.setStringValue_(f"p. {cur} / {tot}")
                                 self.page_slider.setEnabled_(tot > 1)
-                            if AppKit is not None:
-                                try:
-                                    AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_update_slider)
-                                except Exception:
-                                    pass
 
-                        # Dynamically populate Chapters Dropdown Submenu immediately
-                        doc_id = status.reading_state.document_id
-                        if doc_id and doc_id != getattr(self, "_last_loaded_toc_doc_id", None):
-                            self._last_loaded_toc_doc_id = doc_id
-                            tot_p_val = max(1, status.reading_state.total_pages)
-                            toc = getattr(device_manager, "_doc_toc_cache", {}).get(doc_id, [])
+                            # Dynamically populate Chapters Dropdown Submenu immediately
+                            doc_id = status.reading_state.document_id
+                            if doc_id and doc_id != getattr(self, "_last_loaded_toc_doc_id", None):
+                                self._last_loaded_toc_doc_id = doc_id
+                                tot_p_val = max(1, status.reading_state.total_pages)
+                                toc = getattr(device_manager, "_doc_toc_cache", {}).get(doc_id, [])
 
-                            def _rebuild_chapters():
                                 self.chapters_menu.clear()
                                 if toc:
                                     for ch_title, ch_page in toc[:30]:
@@ -745,40 +755,28 @@ class QuadernoMenubarApp(AppBase):
                                             self.chapters_menu.add(rumps.MenuItem(lbl, callback=_make_jump_lm(p)))
                                 else:
                                     self.chapters_menu.add(rumps.MenuItem("Single page document"))
-
-                            if AppKit is not None:
-                                try:
-                                    AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_rebuild_chapters)
-                                except Exception:
-                                    pass
-                    else:
-                        self.doc_item.title = "No active document open"
-                        if hasattr(self, "page_slider") and self.page_slider is not None:
-                            def _disable_slider():
+                        else:
+                            self.doc_item.title = "No active document open"
+                            if hasattr(self, "page_slider") and self.page_slider is not None:
                                 self.page_slider.setEnabled_(False)
                                 if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
                                     self.slider_page_badge.setStringValue_("p. - / -")
-                            if AppKit is not None:
-                                try:
-                                    AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_disable_slider)
-                                except Exception:
-                                    pass
-                        if getattr(self, "_last_loaded_toc_doc_id", None) is not None:
-                            self._last_loaded_toc_doc_id = None
-                            def _clear_chapters():
+                            if getattr(self, "_last_loaded_toc_doc_id", None) is not None:
+                                self._last_loaded_toc_doc_id = None
                                 self.chapters_menu.clear()
                                 self.chapters_menu.add(rumps.MenuItem("No active document"))
-                            if AppKit is not None:
-                                try:
-                                    AppKit.NSOperationQueue.mainQueue().addOperationWithBlock_(_clear_chapters)
-                                except Exception:
-                                    pass
-                else:
-                    self.title = "📖 (offline)"
-                    self.status_item.title = "✗ Disconnected"
-                    self.doc_item.title = "Device Offline"
-            except Exception:
-                self.title = "📖 Quaderno"
+                    else:
+                        self.title = "📖 (offline)"
+                        self.status_item.title = "✗ Disconnected"
+                        self.doc_item.title = "Device Offline"
+
+                self._dispatch_to_main(_apply_ui)
+
+            except Exception as e:
+                logger.error(f"Error in menubar telemetry refresh: {e}", exc_info=True)
+                def _apply_err():
+                    self.title = "📖 Quaderno"
+                self._dispatch_to_main(_apply_err)
             finally:
                 self._telemetry_in_progress = False
 
@@ -814,6 +812,7 @@ class QuadernoMenubarApp(AppBase):
                 notify("Quaderno Companion", success_title, res.get("message", "Sent to device."))
                 self.refresh_telemetry()
             except Exception as e:
+                logger.error(f"Error executing push/summarize: {e}", exc_info=True)
                 err_title = "Quaderno Summarize Error" if is_summary else "Quaderno Push Error"
                 show_alert(err_title, str(e))
 
@@ -944,6 +943,9 @@ class QuadernoMenubarApp(AppBase):
 
 def start_menubar_app(start_server: bool = True):
     """Launch the background daemon and native macOS menubar application."""
+    from quaderno_companion.config import setup_logging
+    setup_logging(log_level="INFO", enable_file_logging=True, enable_console_logging=False)
+    logger.info("Starting Quaderno Companion Menubar application...")
     if sys.platform != "darwin":
         # On non-macOS platforms, run the server daemon
         from quaderno_companion.server import start_server as _run_server

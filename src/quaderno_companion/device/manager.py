@@ -155,7 +155,11 @@ class QuadernoDeviceManager:
 
         with self._sync_lock:
             if not force_refresh and self._client and self._client.is_authenticated and self._current_route:
-                return self._client
+                if self.router._probe_endpoint_sync(self._current_route.host, self._current_route.port, timeout=1.5):
+                    return self._client
+                self._client = None
+                self._current_route = None
+                self.router.invalidate_cache()
 
             route = self.router.get_active_route_sync(force_refresh=force_refresh)
             if not route:
@@ -164,9 +168,18 @@ class QuadernoDeviceManager:
                 )
 
             client = QuadernoClient(host=route.host, port=route.port)
-            client.authenticate_sync()
+            try:
+                client.authenticate_sync()
+            except Exception as auth_err:
+                self.router.invalidate_cache()
+                self._client = None
+                self._current_route = None
+                raise DeviceNotConnectedError(f"Authentication with Quaderno at {route.host} failed: {auth_err}") from auth_err
+
             self._current_route = route
             self._client = client
+            if route.host and route.host not in ("127.0.0.1", "digitalpaper.local"):
+                settings.device_ip = route.host
             return self._client
 
     async def get_client(self, force_refresh: bool = False) -> QuadernoClient:
@@ -198,46 +211,41 @@ class QuadernoDeviceManager:
         total_pages = 1
         raw_toc = []
         try:
-            temp_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-            total_pages = len(temp_doc)
-            raw_toc = temp_doc.get_toc() or []
-            temp_doc.close()
-        except Exception:
-            pass
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            total_pages = max(1, len(reader.pages))
+
+            def _parse_outlines(outlines):
+                entries = []
+                for item in outlines:
+                    if isinstance(item, list):
+                        entries.extend(_parse_outlines(item))
+                    elif hasattr(item, "title"):
+                        try:
+                            p_num = reader.get_destination_page_number(item) + 1
+                            entries.append((str(item.title).strip(), int(p_num)))
+                        except Exception:
+                            pass
+                return entries
+
+            if reader.outline:
+                raw_toc = _parse_outlines(reader.outline)
+        except Exception as e:
+            logger.debug(f"Could not inspect PDF metadata: {e}")
 
         client = await self.get_client()
 
-        # Upload document
-        upload_result = await client.upload_document(
-            pdf_data=pdf_bytes,
-            remote_filename=filename,
-            remote_folder=folder,
+        # Step 1: Upload document
+        doc_id = await client.upload_document(
+            pdf_bytes=pdf_bytes,
+            remote_path=remote_path,
         )
 
-        # Retrieve document ID
-        doc_id = None
-        if isinstance(upload_result, dict):
-            doc_id = upload_result.get("entry_id") or upload_result.get("document_id")
-        if not doc_id:
-            doc_id = await client.resolve_document_id(remote_path)
-
-        if not doc_id:
-            raise RuntimeError(f"Could not resolve document_id for uploaded file {remote_path}")
-
-        if raw_toc:
-            self._doc_toc_cache[doc_id] = [
-                (item[1].strip(), int(item[2]))
-                for item in raw_toc
-                if len(item) >= 3 and item[1].strip()
-            ]
-
-        # Command viewer to open document at specified page
+        # Step 2: Navigate viewer to target page
         target_page = max(1, min(page, total_pages))
         await client.display_document(document_id=doc_id, page=target_page)
 
-        # Update tracked state
-        self._last_pushed_doc_id = doc_id
-        self._last_pushed_time = time.time()
+        # Step 3: Update local and persisted reading state
         self._reading_state = ReadingState(
             document_id=doc_id,
             title=doc_title,
@@ -246,9 +254,16 @@ class QuadernoDeviceManager:
             total_pages=total_pages,
             last_updated=datetime.now(),
         )
+        self._last_pushed_doc_id = doc_id
+        self._last_pushed_time = time.time()
         self._save_persisted_state()
 
-        logger.info(f"Opened '{doc_title}' on Quaderno (Page {target_page}/{total_pages})")
+        if raw_toc:
+            self._doc_toc_cache[doc_id] = raw_toc
+
+        logger.info(
+            f"Successfully pushed and displayed '{doc_title}' (Page {target_page}/{total_pages}) on Quaderno"
+        )
         return {
             "status": "success",
             "document_id": doc_id,
@@ -258,45 +273,50 @@ class QuadernoDeviceManager:
             "total_pages": total_pages,
         }
 
-    async def get_document_toc(self, doc_id: Optional[str] = None) -> List[Tuple[str, int]]:
-        """Retrieve Table of Contents (chapters and page numbers) for the specified or active document."""
-        if not doc_id and self._reading_state:
-            doc_id = self._reading_state.document_id
-
-        if not doc_id:
+    async def get_toc(self, document_id: Optional[str] = None) -> List[Tuple[str, int]]:
+        """Retrieve Table of Contents landmarks for active or specified document."""
+        self._load_persisted_state()
+        target_id = document_id or self._reading_state.document_id
+        if not target_id:
             return []
 
-        return self._doc_toc_cache.get(doc_id, [])
+        if target_id in self._doc_toc_cache:
+            return self._doc_toc_cache[target_id]
+
+        client = await self.get_client()
+        remote_path = self._reading_state.remote_path if target_id == self._reading_state.document_id else None
+        toc = await client.get_document_toc(document_id=target_id, remote_path=remote_path)
+        if toc:
+            self._doc_toc_cache[target_id] = toc
+        return toc
 
     async def navigate(self, action: NavAction, page: Optional[int] = None) -> NavigateResult:
-        """Navigate pages in the currently active document without re-uploading."""
+        """Send navigation commands to Quaderno document viewer.
+
+        Args:
+            action: 'next', 'prev', 'goto', or 'offset'
+            page: Required for 'goto', delta offset for 'offset'.
+        """
         client = await self.get_client()
-        
-        doc_id = self._reading_state.document_id
-        curr = self._reading_state.current_page
-        total = max(1, self._reading_state.total_pages)
 
-        # If no in-memory state, query hardware
-        if not doc_id:
-            recent = None
-            try:
-                recent = await client.get_recent_document()
-            except Exception:
-                pass
-
+        # Check hardware recent doc state first
+        doc_id = None
+        curr = 1
+        total = 1
+        try:
+            recent = await client.get_recent_document()
             if recent and recent.get("entry_id"):
                 doc_id = recent["entry_id"]
                 curr = int(recent.get("current_page", 1))
                 total = int(recent.get("total_page", 1)) if recent.get("total_page") else 1
-                doc_name = recent.get("entry_name") or recent.get("title") or "Document"
-                self._reading_state = ReadingState(
-                    document_id=doc_id,
-                    title=doc_name,
-                    remote_path=recent.get("entry_path", ""),
-                    current_page=curr,
-                    total_pages=total,
-                    last_updated=datetime.now(),
-                )
+        except Exception:
+            pass
+
+        if not doc_id:
+            if self._reading_state.document_id:
+                doc_id = self._reading_state.document_id
+                curr = self._reading_state.current_page
+                total = max(1, self._reading_state.total_pages)
             else:
                 self._load_persisted_state()
                 doc_id = self._reading_state.document_id
@@ -330,7 +350,7 @@ class QuadernoDeviceManager:
         return {
             "status": "success",
             "document_id": doc_id,
-            "title": self._reading_state.title,
+            "title": self._reading_state.title or "Document",
             "page": target,
             "total_pages": total,
             "action": action,
@@ -347,62 +367,92 @@ class QuadernoDeviceManager:
         if not self.is_paired:
             return status
 
+        # Fast liveness ping: if currently connected, check if socket is still alive in <=0.6s
+        with self._sync_lock:
+            current_route = self._current_route
+            current_client = self._client
+
+        if current_route and current_client and current_client.is_authenticated:
+            is_alive = self.router._probe_endpoint_sync(current_route.host, current_route.port, timeout=0.6)
+            if not is_alive:
+                logger.debug(f"Fast ping to {current_route.host}:{current_route.port} failed; device powered off/disconnected.")
+                with self._sync_lock:
+                    self._client = None
+                    self._current_route = None
+                    self.router.invalidate_cache()
+                status.is_connected = False
+                return status
+
         try:
             client = await self.get_client()
-            status.is_connected = True
-            if self._current_route:
-                status.connection_type = self._current_route.connection_type
-                status.host = self._current_route.host
-                status.port = self._current_route.port
 
-            # Battery
+            # 1. Fetch battery first (primary liveness verification)
             try:
-                bat = await client.get_battery_status()
-                lvl = bat.get("level") or bat.get("battery_level")
-                status.battery_level = int(lvl) if lvl is not None else None
-                status.battery_charging = (
-                    bat.get("status") == "charging" or bat.get("charging", False)
-                )
-            except Exception:
-                pass
+                bat_res = await client.get_battery_status()
+                status.is_connected = True
+                if self._current_route:
+                    status.connection_type = self._current_route.connection_type
+                    status.host = self._current_route.host
+                    status.port = self._current_route.port
 
-            # Storage
-            try:
-                storage = await client.get_storage_status()
-                total_b = storage.get("total_space") or storage.get("capacity")
-                free_b = storage.get("free_space") or storage.get("available")
-                if total_b is not None:
-                    status.storage_total_mb = round(float(total_b) / (1024 * 1024), 1)
-                if free_b is not None:
-                    status.storage_free_mb = round(float(free_b) / (1024 * 1024), 1)
-            except Exception:
-                pass
+                if isinstance(bat_res, dict):
+                    lvl = bat_res.get("level") or bat_res.get("battery_level")
+                    status.battery_level = int(lvl) if lvl is not None else None
+                    status.battery_charging = (
+                        bat_res.get("status") == "charging" or bat_res.get("charging", False)
+                    )
+            except Exception as e:
+                logger.debug(f"Device unreachable during status check: {e}")
+                with self._sync_lock:
+                    self._client = None
+                    self._current_route = None
+                    self.router.invalidate_cache()
+                status.is_connected = False
+                return status
 
-            # Synchronize reading state live from Quaderno hardware
+            # 2. Storage status (best effort)
             try:
-                is_recent_push = (time.time() - getattr(self, "_last_pushed_time", 0.0)) < 300.0
-                recent = await client.get_recent_document()
-                if recent and recent.get("entry_id"):
-                    recent_id = recent["entry_id"]
+                storage_res = await client.get_storage_status()
+                if isinstance(storage_res, dict):
+                    total_b = storage_res.get("total_space") or storage_res.get("capacity")
+                    free_b = storage_res.get("free_space") or storage_res.get("available")
+                    if total_b is not None:
+                        status.storage_total_mb = round(float(total_b) / (1024 * 1024), 1)
+                    if free_b is not None:
+                        status.storage_free_mb = round(float(free_b) / (1024 * 1024), 1)
+            except Exception as storage_err:
+                logger.debug(f"Storage status query failed (non-critical): {storage_err}")
+
+            # 3. Synchronize reading state live from Quaderno hardware (best effort)
+            try:
+                recent_res = await client.get_recent_document()
+                if isinstance(recent_res, dict) and recent_res.get("entry_id"):
+                    is_recent_push = (time.time() - getattr(self, "_last_pushed_time", 0.0)) < 300.0
+                    recent_id = recent_res["entry_id"]
                     if not is_recent_push or recent_id == getattr(self, "_last_pushed_doc_id", None):
-                        cur_p = int(recent.get("current_page", 1))
-                        tot_p = int(recent.get("total_page", 1)) if recent.get("total_page") else 1
-                        doc_name = recent.get("entry_name") or recent.get("title") or "Document"
+                        cur_p = int(recent_res.get("current_page", 1))
+                        tot_p = int(recent_res.get("total_page", 1)) if recent_res.get("total_page") else 1
+                        doc_name = recent_res.get("entry_name") or recent_res.get("title") or "Document"
                         self._reading_state = ReadingState(
                             document_id=recent_id,
                             title=doc_name,
-                            remote_path=recent.get("entry_path", ""),
+                            remote_path=recent_res.get("entry_path", ""),
                             current_page=cur_p,
                             total_pages=tot_p,
                             last_updated=datetime.now(),
                         )
                         self._save_persisted_state()
-                status.reading_state = self._reading_state
-            except Exception as e:
-                logger.debug(f"Failed to fetch recent doc from device: {e}")
+            except Exception as recent_err:
+                logger.debug(f"Recent document sync failed (non-critical): {recent_err}")
+
+            status.reading_state = self._reading_state
 
         except Exception as e:
             logger.debug(f"Device not currently connected during status query: {e}")
+            with self._sync_lock:
+                self._client = None
+                self._current_route = None
+                self.router.invalidate_cache()
             status.is_connected = False
 
         return status

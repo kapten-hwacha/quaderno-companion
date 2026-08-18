@@ -78,8 +78,11 @@ class QuadernoClient:
 
             def _thread_safe_send(request, **kwargs):
                 if "timeout" not in kwargs or kwargs.get("timeout") is None:
-                    is_file = "file" in getattr(request, "url", "")
-                    kwargs["timeout"] = 30.0 if is_file else 10.0
+                    url = getattr(request, "url", "")
+                    if "file" in url:
+                        kwargs["timeout"] = 30.0
+                    else:
+                        kwargs["timeout"] = 5.0
                 with lock:
                     return orig_send(request, **kwargs)
 
@@ -140,6 +143,8 @@ class QuadernoClient:
                     f"Ensure the device screen is awake and unlocked, or run `quadctl pair`."
                 ) from ke
             except Exception as e:
+                if self._is_network_error(e):
+                    raise DeviceNotConnectedError(f"Cannot reach Quaderno at {self.host}: {e}") from e
                 if attempt == 0:
                     time.sleep(0.2)
                     continue
@@ -157,7 +162,6 @@ class QuadernoClient:
             Tuple of (device_id, key_pem) strings.
         """
         settings.ensure_directories()
-        
         clean_host = self.host.split(":")[0] if self.host else self.host
         dp = DigitalPaper(addr=clean_host)
 
@@ -187,16 +191,20 @@ class QuadernoClient:
 
         client_id, key = await asyncio.to_thread(_reg)
 
-        # Persist credentials with restrictive owner-only permissions (0600)
-        import os
+        # Save credentials to config directory
         settings.device_id_path.write_text(client_id.strip())
-        os.chmod(settings.device_id_path, 0o600)
         settings.device_key_path.write_text(key.strip())
-        os.chmod(settings.device_key_path, 0o600)
-        if clean_host:
-            settings.device_ip = clean_host
+        try:
+            import os
+            os.chmod(settings.device_id_path, 0o600)
+            os.chmod(settings.device_key_path, 0o600)
+        except Exception:
+            pass
+
+        # Update persisted device IP if provided
+        if clean_host and clean_host not in ("127.0.0.1", "localhost", "digitalpaper.local"):
             try:
-                from quaderno_companion.setup_wizard import update_env_file
+                from quaderno_companion.config import update_env_file
                 update_env_file(Path(".env"), {"QUADERNO_DEVICE_IP": clean_host})
                 update_env_file(settings.config_dir / ".env", {"QUADERNO_DEVICE_IP": clean_host})
             except Exception as e:
@@ -213,45 +221,86 @@ class QuadernoClient:
         if not self.has_credentials:
             return False
         try:
+            clean_host = self.host.split(":")[0] if self.host else "127.0.0.1"
+            import socket
+            try:
+                with socket.create_connection((clean_host, self.port), timeout=1.0):
+                    pass
+            except (OSError, socket.gaierror, TimeoutError):
+                self._is_authenticated = False
+                self._dp = None
+                return False
+
             dp = self._ensure_dp_instance()
             return await asyncio.to_thread(dp.ping)
         except Exception:
+            self._is_authenticated = False
+            self._dp = None
             return False
 
-    def _is_auth_or_conn_error(self, e: Exception) -> bool:
-        """Check if an exception is caused by session expiry, 401/403 HTTP error, or connection reset."""
+    def _is_network_error(self, e: Exception) -> bool:
+        """Check if an exception is a network connectivity or timeout error."""
+        err_str = str(e).lower()
+        return any(
+            x in err_str
+            for x in (
+                "timeout",
+                "timed out",
+                "connection refused",
+                "connection reset",
+                "no route to host",
+                "network is unreachable",
+                "broken pipe",
+                "name or service not known",
+                "nodename nor servname provided",
+                "failed to establish a new connection",
+                "max retries exceeded",
+                "remotedisconnected",
+                "connection closed",
+                "expecting value",
+                "empty response",
+            )
+        )
+
+    def _is_auth_error(self, e: Exception) -> bool:
+        """Check if an exception is specifically an authentication or session expiry error."""
+        if self._is_network_error(e):
+            return False
         resp = getattr(e, "response", None)
-        if resp is not None and getattr(resp, "status_code", None) in (401, 403, 502, 503, 504):
+        if resp is not None and getattr(resp, "status_code", None) in (401, 403):
             return True
         err_str = str(e).lower()
         return any(
             x in err_str
             for x in (
-                "authentication",
                 "401",
+                "403",
                 "unauthorized",
                 "forbidden",
-                "timeout",
-                "timed out",
-                "connection reset",
-                "broken pipe",
-                "session",
+                "session expired",
+                "invalid session",
+                "missing session cookie",
+                "nonce",
             )
         )
 
     def _run_with_reauth(self, fn):
-        """Execute a function with automatic re-authentication if session expired or timed out."""
+        """Execute a function with automatic re-authentication if session expired or fast fail on disconnect."""
         try:
             return fn()
         except Exception as e:
-            if self._is_auth_or_conn_error(e):
-                logger.info(f"Quaderno connection/session issue ({str(e)[:60]}). Re-authenticating...")
+            if self._is_auth_error(e):
+                logger.info(f"Quaderno session expired ({str(e)[:60]}). Re-authenticating...")
                 try:
                     self.authenticate_sync()
                     return fn()
                 except Exception as retry_err:
                     logger.error(f"Re-auth retry failed: {retry_err}")
                     raise
+            elif self._is_network_error(e):
+                self._is_authenticated = False
+                self._dp = None
+                raise DeviceNotConnectedError(f"Quaderno connection lost: {e}") from e
             raise
 
     def _safe_dp_upload(self, dp: Any, fh: Any, remote_path: str) -> str:
@@ -310,45 +359,59 @@ class QuadernoClient:
 
     async def upload_document(
         self,
-        pdf_data: Union[bytes, io.BytesIO],
-        remote_filename: str,
+        pdf_data: Optional[Union[bytes, io.BytesIO, Path, str]] = None,
+        remote_filename: Optional[str] = None,
         remote_folder: str = "Document/Companion",
-    ) -> Dict[str, Any]:
+        *,
+        pdf_bytes: Optional[Union[bytes, io.BytesIO]] = None,
+        remote_path: Optional[str] = None,
+        filename: Optional[str] = None,
+        folder: Optional[str] = None,
+    ) -> str:
         """Upload a PDF document to Quaderno internal storage with auto re-auth."""
         if not self._is_authenticated:
             await self.authenticate()
 
         dp = self._ensure_dp_instance()
-        remote_path = f"{remote_folder.strip('/')}/{remote_filename.lstrip('/')}"
+
+        data = pdf_bytes if pdf_bytes is not None else pdf_data
+        if data is None:
+            raise ValueError("pdf_data or pdf_bytes must be provided")
+
+        if remote_path:
+            clean_path = remote_path.strip("/")
+            if not clean_path.lower().startswith("document"):
+                target_path = f"Document/{clean_path}"
+            else:
+                target_path = clean_path
+        else:
+            fname = filename or remote_filename or "document.pdf"
+            fldr = folder or remote_folder or "Document/Companion"
+            clean_folder = fldr.strip("/")
+            if not clean_folder:
+                clean_folder = "Document"
+            elif clean_folder != "Document" and not clean_folder.lower().startswith("document/"):
+                clean_folder = f"Document/{clean_folder}"
+            target_path = f"{clean_folder}/{fname.lstrip('/')}"
 
         def _upload():
-            if isinstance(pdf_data, bytes):
-                stream = io.BytesIO(pdf_data)
+            if isinstance(data, (str, Path)):
+                stream = io.BytesIO(Path(data).read_bytes())
+            elif isinstance(data, bytes):
+                stream = io.BytesIO(data)
             else:
-                stream = pdf_data
+                stream = data
                 stream.seek(0)
 
             def _do_upload():
                 stream.seek(0)
-                return self._safe_dp_upload(dp, stream, remote_path)
+                return self._safe_dp_upload(dp, stream, target_path)
 
-            doc_id = self._run_with_reauth(_do_upload)
+            return self._run_with_reauth(_do_upload)
 
-            # Resolve document info
-            try:
-                info = dp.list_document_info(remote_path)
-                if isinstance(info, dict):
-                    info.setdefault("entry_id", doc_id)
-                    info.setdefault("document_id", doc_id)
-                    info.setdefault("entry_path", remote_path)
-                    return info
-                return {"entry_id": doc_id, "document_id": doc_id, "entry_path": remote_path}
-            except Exception:
-                return {"entry_id": doc_id, "document_id": doc_id, "entry_path": remote_path}
-
-        result = await asyncio.to_thread(_upload)
-        logger.info(f"Uploaded document to Quaderno: {remote_path}")
-        return result
+        doc_id = await asyncio.to_thread(_upload)
+        logger.info(f"Uploaded document to Quaderno: {target_path} (ID: {doc_id})")
+        return str(doc_id)
 
     async def display_document(self, document_id: str, page: int = 1) -> None:
         """Instruct Quaderno to open and display a document at a specific page."""
@@ -460,7 +523,10 @@ class QuadernoClient:
             except Exception as e:
                 self._is_authenticated = False
                 self._dp = None  # Reset session adapter on auth failure
-                logger.error(f"Authentication failed with Quaderno: {e}")
+                if isinstance(e, DeviceNotConnectedError) or self._is_network_error(e):
+                    logger.debug(f"Quaderno at {self.host} unreachable: {e}")
+                else:
+                    logger.error(f"Authentication failed with Quaderno: {e}")
                 raise e
 
     def _run_sync_with_reauth(self, fn):
@@ -473,10 +539,14 @@ class QuadernoClient:
         try:
             return fn()
         except Exception as e:
-            if self._is_auth_or_conn_error(e):
+            if self._is_auth_error(e):
                 logger.info(f"Sync session expired ({str(e)[:60]}). Re-authenticating...")
                 self.authenticate_sync()
                 return fn()
+            elif self._is_network_error(e):
+                self._is_authenticated = False
+                self._dp = None
+                raise DeviceNotConnectedError(f"Quaderno connection lost: {e}") from e
             raise
 
     def download_document(self, document_id_or_path: str) -> bytes:

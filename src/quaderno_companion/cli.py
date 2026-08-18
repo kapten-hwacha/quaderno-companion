@@ -680,7 +680,55 @@ def notebook_list():
     run_async(_list())
 
 
+@app.command(name="logs")
+def view_logs(
+    lines: int = typer.Option(50, "-n", "--lines", help="Number of lines to show from the log file"),
+    follow: bool = typer.Option(False, "-f", "--follow", help="Follow log output in real-time"),
+    clear: bool = typer.Option(False, "--clear", help="Clear the companion log file"),
+):
+    """View or tail the Quaderno Companion application logs."""
+    log_file = settings.log_file
+    if clear:
+        if log_file.exists():
+            log_file.write_text("")
+            rprint("[bold green]✓[/bold green] Cleared companion log file.")
+        else:
+            rprint("[yellow]Log file does not exist yet.[/yellow]")
+        return
+
+    if not log_file.exists():
+        rprint(f"[yellow]No log file found at {log_file}. Run the companion daemon or menubar app to generate logs.[/yellow]")
+        return
+
+    if follow:
+        rprint(f"[bold cyan]Tailing {log_file} (Ctrl+C to stop)...[/bold cyan]")
+        import time
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                f_lines = f.readlines()
+                for l in f_lines[-lines:]:
+                    print(l, end="")
+                while True:
+                    line = f.readline()
+                    if line:
+                        print(line, end="")
+                    else:
+                        time.sleep(0.5)
+        except KeyboardInterrupt:
+            rprint("\n[dim]Stopped tailing logs.[/dim]")
+    else:
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                f_lines = f.readlines()
+                for l in f_lines[-lines:]:
+                    print(l, end="")
+        except Exception as e:
+            rprint(f"[red]Could not read log file: {e}[/red]")
+
+
 if __name__ == "__main__":
+    from quaderno_companion.config import setup_logging
+    setup_logging(log_level="INFO", enable_file_logging=True, enable_console_logging=False)
     app()
 
 

@@ -99,6 +99,10 @@ class Settings(BaseSettings):
         default=30,
         description="Interval in seconds for periodic background sync passes.",
     )
+    telemetry_poll_interval: int = Field(
+        default=10,
+        description="Interval in seconds for passive device telemetry polling (0.1 Hz).",
+    )
     auto_sync_enabled: bool = Field(
         default=True,
         description="Whether background automatic folder sync is enabled.",
@@ -256,5 +260,54 @@ class Settings(BaseSettings):
         return deleted_count
 
 
+    @property
+    def log_file(self) -> Path:
+        """Path to standard companion log file."""
+        return self.config_dir / "companion.log"
+
+
 # Global settings instance
 settings = Settings()
+
+
+def setup_logging(
+    log_level: str = "INFO",
+    enable_file_logging: bool = True,
+    enable_console_logging: bool = True,
+) -> None:
+    """Configure centralized logging with rotating file handler and console output."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    root_logger = logging.getLogger("quaderno_companion")
+    root_logger.setLevel(level)
+
+    # Avoid duplicate handlers if setup_logging is called multiple times
+    existing_handler_types = {type(h) for h in root_logger.handlers}
+
+    if enable_file_logging and RotatingFileHandler not in existing_handler_types:
+        try:
+            settings.config_dir.mkdir(parents=True, exist_ok=True)
+            file_handler = RotatingFileHandler(
+                settings.log_file,
+                maxBytes=5 * 1024 * 1024,  # 5 MB
+                backupCount=3,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            root_logger.addHandler(file_handler)
+        except Exception:
+            pass
+
+    if enable_console_logging and logging.StreamHandler not in existing_handler_types:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(level)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
