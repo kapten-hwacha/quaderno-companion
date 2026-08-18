@@ -5,20 +5,20 @@ Exposes REST endpoints for:
 - POST /api/viewer/page (navigates to absolute or relative page index)
 - GET /api/viewer/status (fetches active document ID, title, and page index)
 - GET /api/device/status (fetches battery, storage, route, reading state)
-- POST /api/agent/push (one-click push endpoint for bookmarklets & browser extensions)
+- POST /api/agent/push (push and summarization endpoint for scripts and integrations)
 - POST /api/agent/chat (agent natural language intent execution)
 - GET / (Embedded dashboard for device status and control)
 """
 
 import collections
 from contextlib import asynccontextmanager
+import hmac
 import io
 import logging
 import threading
 import time
 from typing import Any, Dict, Literal, Optional
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -41,8 +41,9 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan managing directory initialization, background sync, and cache cleanup."""
+    """Application lifespan managing directory initialization, background sync, cache cleanup, and auth token."""
     settings.ensure_directories()
+    settings.get_or_create_api_key()
     deleted = settings.clean_cache(max_age_days=7, max_total_mb=200)
     if deleted > 0:
         logger.info(f"Cleaned {deleted} stale cache file(s) on startup.")
@@ -65,30 +66,40 @@ app = FastAPI(
 # Maximum allowed file upload size (100 MB)
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
-# Enable CORS for browser extensions and local bookmarklets
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
-
 
 # ---------------- Security & Rate Limiting ----------------
 
 class SlidingWindowRateLimiter:
-    """Sliding-window in-memory rate limiter per client IP."""
+    """Sliding-window in-memory rate limiter per client IP with bounded memory eviction."""
 
-    def __init__(self, requests_per_minute: int = 120):
+    def __init__(self, requests_per_minute: int = 120, max_tracked_ips: int = 5000):
         self.rate = requests_per_minute
         self.window = 60.0
+        self.max_tracked_ips = max_tracked_ips
         self._history: Dict[str, collections.deque] = collections.defaultdict(collections.deque)
         self._lock = threading.Lock()
+        self._last_cleanup = time.time()
+
+    def _cleanup_stale_entries(self, now: float) -> None:
+        """Evict IP buckets that have had no activity within the window."""
+        stale_ips = [ip for ip, q in self._history.items() if not q or (now - q[-1]) > self.window]
+        for ip in stale_ips:
+            del self._history[ip]
+
+        # If still over limit, drop oldest tracked entries
+        if len(self._history) > self.max_tracked_ips:
+            excess = len(self._history) - self.max_tracked_ips
+            for ip in list(self._history.keys())[:excess]:
+                del self._history[ip]
 
     def is_allowed(self, client_ip: str) -> bool:
         now = time.time()
         with self._lock:
+            # Periodic cleanup every 60 seconds
+            if now - self._last_cleanup > 60.0:
+                self._cleanup_stale_entries(now)
+                self._last_cleanup = now
+
             q = self._history[client_ip]
             while q and (now - q[0]) > self.window:
                 q.popleft()
@@ -116,20 +127,19 @@ def verify_api_auth(
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ):
-    """Verify daemon authentication when QUADERNO_API_KEY is configured."""
-    if not settings.api_key:
-        return True  # Auth is disabled by default for zero-friction local bridge
+    """Verify daemon authentication using constant-time comparison against QUADERNO_API_KEY."""
+    expected_key = settings.get_or_create_api_key()
 
-    # Check X-API-Key header
-    if x_api_key and x_api_key.strip() == settings.api_key.strip():
+    # Check X-API-Key header using constant-time comparison
+    if x_api_key and hmac.compare_digest(x_api_key.strip(), expected_key):
         return True
 
-    # Check Authorization: Bearer <key>
+    # Check Authorization: Bearer <key> using constant-time comparison
     if authorization:
         parts = authorization.strip().split()
-        if len(parts) == 2 and parts[0].lower() == "bearer" and parts[1] == settings.api_key.strip():
+        if len(parts) == 2 and parts[0].lower() == "bearer" and hmac.compare_digest(parts[1], expected_key):
             return True
-        if authorization.strip() == settings.api_key.strip():
+        if hmac.compare_digest(authorization.strip(), expected_key):
             return True
 
     raise HTTPException(
@@ -310,7 +320,7 @@ async def navigate_page(nav: PageNavigationRequest):
     dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
 )
 async def agent_push(req: AgentPushRequest):
-    """Zero-friction trigger endpoint for bookmarklets and browser extensions."""
+    """Trigger endpoint for programmatic URL push and summarization."""
     try:
         if req.summarize or (req.pages is not None and req.pages > 0):
             target_pages = req.pages or 1
@@ -362,7 +372,7 @@ async def trigger_sync():
         return res.to_dict()
     except Exception as e:
         logger.error(f"Sync pass failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Sync failed: {e}")
+        raise HTTPException(status_code=500, detail="Sync pass failed.")
 
 
 @app.get(

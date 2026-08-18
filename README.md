@@ -48,7 +48,7 @@ The agent ingests web pages, academic papers, and reading materials, optimizes t
 - **Network Auto-Routing**: Automatically discovers and fails over across local Wi-Fi (`digitalpaper.local` or static IP), Quaderno Wi-Fi Access Point / SoftAP (`192.168.43.1` / dynamic gateway), and USB tethering (`172.25.47.1`).
 - **Autonomous Agent & Dual-Engine Summarizer**: Synthesizes structured 1–5 page executive briefs from text/URLs directly into high-contrast E-ink layouts via either **⚡ Gemini API** (instant ~2s briefs) or **📚 Google Gemini Notebook** (NotebookLM direct RPC with source-grounded citations).
 - **Google Gemini Notebook Integration**: Automates source ingestion, grounding synthesis, and summary extraction using ephemeral or shared Gemini Notebooks via direct async RPCs.
-- **1-Click Triggers**: Browser bookmarklet, Chrome extension (Manifest V3), and Raycast script commands for desktop workflows.
+- **1-Click Triggers**: Native menu bar companion, hotkeys, and Raycast script commands for desktop workflows.
 
 ---
 
@@ -291,7 +291,7 @@ Symlink or copy the scripts in `triggers/raycast/` to your Raycast scripts direc
 - `GET /api/sync/status`: Returns sync engine running state and last sync results.
 - `POST /api/documents/open`: Accepts multipart file upload or JSON payload `{"url_or_path": "...", "page": 1}`.
 - `POST /api/viewer/page`: Accepts `{"action": "next" | "prev" | "goto" | "offset", "page": <int>}`.
-- `POST /api/agent/push`: Ingestion webhook for browser extensions (`{"url": "...", "title": "..."}`).
+- `POST /api/agent/push`: Programmatic URL push and summarization endpoint (`{"url": "...", "title": "..."}`).
 - `POST /api/agent/chat`: Natural language intent dispatcher (`{"query": "..."}`).
 
 ---
@@ -301,14 +301,13 @@ Symlink or copy the scripts in `triggers/raycast/` to your Raycast scripts direc
 Quaderno Companion can be compiled into a standalone macOS `.app` bundle, `.dmg` installer, and Python wheel:
 
 ```bash
-# Build all release artifacts (Wheel, DMG, Extensions, and Checksums)
+# Build all release artifacts (Wheel, DMG, and Checksums)
 uv run python scripts/release.py
 ```
 
 Generated outputs in `dist/`:
 - **`Quaderno-Companion-v*.dmg`**: Standalone macOS installer containing `Quaderno Companion.app` (runs as a lightweight menu bar agent with zero Dock clutter).
 - **`quaderno_companion-*.whl`**: Isolated Python wheel installable via `uv tool install dist/quaderno_companion-*.whl` or `pipx`.
-- **`quaderno-chrome-extension-v*.zip`** & **`quaderno-firefox-extension-v*.zip`**: Ready-to-load browser companion packages.
 - **`checksums.sha256`**: SHA256 integrity verification hashes.
 
 ---

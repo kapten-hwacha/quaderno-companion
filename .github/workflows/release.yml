@@ -42,7 +42,6 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
             dist/*.dmg
-            dist/*.zip
             dist/checksums.sha256
           draft: false
           prerelease: false

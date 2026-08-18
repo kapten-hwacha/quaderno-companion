@@ -5,10 +5,12 @@ converting them into optimized E-ink PDF streams ready for Quaderno display.
 """
 
 import hashlib
+import ipaddress
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
+import re
+import socket
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 import httpx
@@ -58,17 +60,48 @@ class ContentFetcher:
         self.builder = EinkDocumentBuilder(profile_name=self.profile)
 
     def _validate_remote_url(self, url: str) -> None:
-        """Validate URL to prevent SSRF against loopback and cloud metadata."""
+        """Validate URL to prevent SSRF against loopback, private networks, and cloud metadata."""
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             raise ValueError(f"Invalid URL scheme: '{parsed.scheme}'. Only http and https are allowed.")
-        host = (parsed.hostname or "").lower()
+        host = (parsed.hostname or "").lower().strip("[]")
         if not host:
             raise ValueError("Invalid URL: missing host.")
-        if host in ("169.254.169.254", "metadata.google.internal", "instance-data") or host.startswith("169.254."):
+
+        # Block well-known cloud metadata hostnames
+        if host in ("metadata.google.internal", "instance-data", "metadata") or host.endswith(".internal"):
             raise ValueError("Access to cloud metadata endpoints is blocked for security.")
-        if host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
-            raise ValueError("Access to local loopback endpoints is blocked for security.")
+
+        # Resolve host and inspect all target IP addresses (IPv4 & IPv6)
+        try:
+            addr_info = socket.getaddrinfo(host, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            # If DNS resolution fails, check if the string directly represents an IP
+            addr_info = []
+
+        resolved_ips = {item[4][0] for item in addr_info}
+        if not resolved_ips:
+            try:
+                # Direct IP literal check
+                resolved_ips.add(str(ipaddress.ip_address(host)))
+            except ValueError:
+                # Valid public domain that may be resolved later during request, or offline
+                pass
+
+        for ip_str in resolved_ips:
+            try:
+                ip = ipaddress.ip_address(ip_str)
+            except ValueError:
+                continue
+
+            if ip.is_loopback:
+                raise ValueError(f"Access to local loopback endpoints is blocked for security ({ip_str}).")
+            if ip.is_link_local or ip_str.startswith("169.254."):
+                raise ValueError(f"Access to cloud metadata or link-local endpoints is blocked for security ({ip_str}).")
+            if ip.is_private:
+                raise ValueError(f"Access to private network endpoints is blocked for security ({ip_str}).")
+            if ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+                raise ValueError(f"Access to reserved network endpoints is blocked for security ({ip_str}).")
 
     def _validate_local_path(self, path: Path) -> None:
         """Validate local file to prevent arbitrary extraction of sensitive credentials/system files."""
@@ -78,6 +111,19 @@ class ContentFetcher:
             raise ValueError("Access to credential or secret files is blocked for security.")
         if resolved.is_relative_to(Path("/etc")) or resolved.is_relative_to(Path("/var/root")):
             raise ValueError("Access to system directory files is blocked for security.")
+
+    def _create_http_client(self, timeout: float = 30.0) -> httpx.AsyncClient:
+        """Create an HTTP client with SSRF redirect validation."""
+        async def _check_redirect(response: httpx.Response) -> None:
+            if response.is_redirect and "location" in response.headers:
+                target_url = str(response.url.join(response.headers["location"]))
+                self._validate_remote_url(target_url)
+
+        return httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=timeout,
+            event_hooks={"response": [_check_redirect]},
+        )
 
     async def fetch(
         self,
@@ -129,7 +175,7 @@ class ContentFetcher:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+        async with self._create_http_client(timeout=30.0) as client:
             response = await client.get(source_url_or_path, headers=headers)
             
             # Check for anti-bot WAF / Cloudflare challenge page before raise_for_status
@@ -262,7 +308,7 @@ class ContentFetcher:
     ) -> FetchedDocument:
         """Download remote PDF and pass through optimization."""
         self._validate_remote_url(pdf_url)
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60.0) as client:
+        async with self._create_http_client(timeout=60.0) as client:
             resp = await client.get(pdf_url)
             if self._is_waf_or_bot_challenge(resp):
                 domain = urlparse(pdf_url).netloc

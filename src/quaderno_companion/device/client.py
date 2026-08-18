@@ -196,9 +196,11 @@ class QuadernoClient:
         if clean_host:
             settings.device_ip = clean_host
             try:
-                Path(".env").write_text(f"QUADERNO_DEVICE_IP={clean_host}\n")
-            except Exception:
-                pass
+                from quaderno_companion.setup_wizard import update_env_file
+                update_env_file(Path(".env"), {"QUADERNO_DEVICE_IP": clean_host})
+                update_env_file(settings.config_dir / ".env", {"QUADERNO_DEVICE_IP": clean_host})
+            except Exception as e:
+                logger.debug(f"Could not persist device IP to .env: {e}")
         logger.info(f"Saved Quaderno credentials securely to {settings.config_dir}")
 
         # Reset instance to use new credentials

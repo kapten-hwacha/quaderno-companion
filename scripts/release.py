@@ -4,8 +4,7 @@
 Builds:
 1. Python wheel (.whl) & source distribution (.tar.gz)
 2. macOS Standalone Application (.app) & Disk Image (.dmg)
-3. Browser Extension bundles (Chrome & Firefox .zip)
-4. SHA256 Checksums file (checksums.sha256)
+3. SHA256 Checksums file (checksums.sha256)
 """
 
 import hashlib
@@ -54,10 +53,7 @@ def main():
     # 1. Build Python Wheels & Sdist
     run_command(["uv", "build"], "Building Python Wheel and Source Distribution")
 
-    # 2. Build Browser Extensions
-    run_command([sys.executable, str(SCRIPTS_DIR / "build_extensions.py")], "Packaging Browser Extensions")
-
-    # 3. Build macOS App & DMG (if on macOS)
+    # 2. Build macOS App & DMG (if on macOS)
     if sys.platform == "darwin":
         run_command([sys.executable, str(SCRIPTS_DIR / "build_app.py")], "Building macOS .app and .dmg")
     else:

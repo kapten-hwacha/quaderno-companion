@@ -178,6 +178,23 @@ class Settings(BaseSettings):
     def active_screen_profile(self) -> ScreenProfile:
         return SCREEN_PROFILES.get(self.default_profile, SCREEN_PROFILES["A4"])
 
+    def get_or_create_api_key(self) -> str:
+        """Retrieve configured API key or automatically generate and persist one on first run."""
+        if self.api_key and self.api_key.strip():
+            return self.api_key.strip()
+
+        import secrets
+        generated = secrets.token_urlsafe(32)
+        self.api_key = generated
+
+        try:
+            from quaderno_companion.setup_wizard import update_env_file
+            update_env_file(self.config_dir / ".env", {"QUADERNO_API_KEY": generated})
+        except Exception:
+            pass
+
+        return generated
+
     def ensure_directories(self) -> None:
         """Create necessary config, cache, and sync directories with safe permissions."""
         self.config_dir.mkdir(parents=True, exist_ok=True)

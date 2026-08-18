@@ -3,10 +3,12 @@
 from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
+from quaderno_companion.config import settings
 from quaderno_companion.device.manager import DeviceStatus, ReadingState
 from quaderno_companion.server import app
 
-client = TestClient(app)
+# Authenticated test client using daemon API key
+client = TestClient(app, headers={"X-API-Key": settings.get_or_create_api_key()})
 
 
 def test_healthz():
@@ -73,14 +75,14 @@ def test_viewer_navigation_endpoint():
         assert data["details"]["page"] == 5
 
 
-def test_cors_configuration():
-    """Verify CORS middleware is configured safely without allow-credentials wildcard."""
+def test_cors_not_allowed():
+    """Verify CORS wildcard headers are not exposed, preventing malicious browser cross-origin requests."""
     response = client.options(
         "/api/device/status",
-        headers={"Origin": "https://example.com", "Access-Control-Request-Method": "GET"},
+        headers={"Origin": "https://malicious-website.com", "Access-Control-Request-Method": "GET"},
     )
-    assert response.headers.get("access-control-allow-origin") == "*"
-    assert response.headers.get("access-control-allow-credentials") is None
+    # Without CORS middleware, FastAPI does not return access-control-allow-origin header
+    assert response.headers.get("access-control-allow-origin") is None
 
 
 def test_open_document_validation_error():
@@ -94,44 +96,85 @@ def test_open_document_validation_error():
 
 
 def test_api_key_authentication():
-    """Verify daemon authentication when api_key is configured."""
-    from quaderno_companion.config import settings
+    """Verify daemon authentication enforcement."""
+    unauthed_client = TestClient(app)
 
     original_key = settings.api_key
     try:
         settings.api_key = "secret-test-token"
 
         # 1. Missing auth header -> 401
-        res = client.get("/api/viewer/status")
+        res = unauthed_client.get("/api/viewer/status")
         assert res.status_code == 401
 
         # 2. Invalid auth header -> 401
-        res = client.get("/api/viewer/status", headers={"X-API-Key": "wrong-token"})
+        res = unauthed_client.get("/api/viewer/status", headers={"X-API-Key": "wrong-token"})
         assert res.status_code == 401
 
         # 3. Valid X-API-Key -> success
         with patch("quaderno_companion.server.tool_get_reading_state", return_value={"status": "idle"}):
-            res = client.get("/api/viewer/status", headers={"X-API-Key": "secret-test-token"})
+            res = unauthed_client.get("/api/viewer/status", headers={"X-API-Key": "secret-test-token"})
             assert res.status_code == 200
 
         # 4. Valid Authorization: Bearer -> success
         with patch("quaderno_companion.server.tool_get_reading_state", return_value={"status": "idle"}):
-            res = client.get("/api/viewer/status", headers={"Authorization": "Bearer secret-test-token"})
+            res = unauthed_client.get("/api/viewer/status", headers={"Authorization": "Bearer secret-test-token"})
             assert res.status_code == 200
     finally:
         settings.api_key = original_key
 
 
+def test_get_or_create_api_key(tmp_path):
+    """Verify auto-generation and persistence of API key."""
+    from quaderno_companion.config import Settings
+
+    test_settings = Settings(config_dir=tmp_path / "config", api_key=None)
+    key = test_settings.get_or_create_api_key()
+    assert len(key) >= 32
+    assert test_settings.api_key == key
+
+    # Verify key was written to config .env
+    env_file = tmp_path / "config" / ".env"
+    assert env_file.exists()
+    assert key in env_file.read_text()
+
+    # Second call returns same key
+    assert test_settings.get_or_create_api_key() == key
+
+
 def test_rate_limiter():
-    """Verify sliding-window rate limiter behavior."""
+    """Verify sliding-window rate limiter behavior and memory eviction."""
     from quaderno_companion.server import SlidingWindowRateLimiter
-    limiter = SlidingWindowRateLimiter(requests_per_minute=3)
+    import time
+
+    limiter = SlidingWindowRateLimiter(requests_per_minute=3, max_tracked_ips=2)
 
     assert limiter.is_allowed("1.2.3.4") is True
     assert limiter.is_allowed("1.2.3.4") is True
     assert limiter.is_allowed("1.2.3.4") is True
     assert limiter.is_allowed("1.2.3.4") is False  # 4th request within 60s blocked
     assert limiter.is_allowed("5.6.7.8") is True  # Different IP allowed
+
+    # Test eviction of stale entries
+    limiter._last_cleanup = 0.0  # Force cleanup trigger on next check
+    # Pretend old IPs have timestamps 70s in the past
+    old_time = time.time() - 70.0
+    limiter._history["1.2.3.4"] = limiter._history["1.2.3.4"].__class__([old_time])
+    limiter._history["5.6.7.8"] = limiter._history["5.6.7.8"].__class__([old_time])
+
+    assert limiter.is_allowed("9.9.9.9") is True
+    # Stale IPs should have been pruned
+    assert "1.2.3.4" not in limiter._history
+    assert "5.6.7.8" not in limiter._history
+
+
+def test_sync_error_sanitized():
+    """Verify /api/sync returns a generic sanitized error message on failure."""
+    with patch("quaderno_companion.server.syncer.sync_pass", side_effect=RuntimeError("sensitive internal path /var/secret")):
+        res = client.post("/api/sync")
+        assert res.status_code == 500
+        assert res.json()["detail"] == "Sync pass failed."
+        assert "/var/secret" not in res.json()["detail"]
 
 
 def test_cache_cleanup(tmp_path):

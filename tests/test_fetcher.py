@@ -135,12 +135,15 @@ async def test_waf_challenge_detection():
 
 @pytest.mark.asyncio
 async def test_ssrf_url_validation():
-    """Verify that cloud metadata, loopback, and invalid schemes are blocked."""
+    """Verify that cloud metadata, loopback, private networks, and invalid schemes are blocked."""
     fetcher = ContentFetcher(profile_name="A4")
 
     # Cloud metadata SSRF
     with pytest.raises(ValueError, match="cloud metadata"):
         fetcher._validate_remote_url("http://169.254.169.254/latest/meta-data/")
+
+    with pytest.raises(ValueError, match="cloud metadata"):
+        fetcher._validate_remote_url("http://metadata.google.internal/computeMetadata/v1/")
 
     # Loopback SSRF
     with pytest.raises(ValueError, match="loopback"):
@@ -149,9 +152,53 @@ async def test_ssrf_url_validation():
     with pytest.raises(ValueError, match="loopback"):
         fetcher._validate_remote_url("http://localhost:5000/api/device/status")
 
+    with pytest.raises(ValueError, match="loopback"):
+        fetcher._validate_remote_url("http://[::1]:8000/secret")
+
+    # RFC1918 Private Network SSRF
+    with pytest.raises(ValueError, match="private network"):
+        fetcher._validate_remote_url("http://192.168.1.1/admin")
+
+    with pytest.raises(ValueError, match="private network"):
+        fetcher._validate_remote_url("http://10.0.0.5:8080/metrics")
+
+    with pytest.raises(ValueError, match="private network"):
+        fetcher._validate_remote_url("http://172.16.0.1/status")
+
     # Invalid scheme
     with pytest.raises(ValueError, match="scheme"):
         fetcher._validate_remote_url("file:///etc/passwd")
+
+
+@pytest.mark.asyncio
+async def test_ssrf_redirect_validation():
+    """Verify that redirect hooks intercept and block redirects to private or cloud metadata IPs."""
+    import httpx
+    fetcher = ContentFetcher(profile_name="A4")
+
+    client = fetcher._create_http_client()
+    # Mock redirect response with Location header targeting 169.254.169.254
+    req = httpx.Request("GET", "https://public-site.com/redirect")
+    redirect_resp = httpx.Response(
+        status_code=302,
+        headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+        request=req,
+    )
+
+    hook = client.event_hooks["response"][0]
+    with pytest.raises(ValueError, match="cloud metadata"):
+        await hook(redirect_resp)
+
+    # Mock redirect response with Location header targeting private IP
+    redirect_private = httpx.Response(
+        status_code=301,
+        headers={"Location": "http://192.168.1.1/router-login"},
+        request=req,
+    )
+    with pytest.raises(ValueError, match="private network"):
+        await hook(redirect_private)
+
+    await client.aclose()
 
 
 @pytest.mark.asyncio

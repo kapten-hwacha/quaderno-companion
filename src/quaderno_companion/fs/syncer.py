@@ -92,13 +92,21 @@ class QuadernoSyncer:
         return {}
 
     def _save_state(self, state: Dict[str, Any]) -> None:
-        """Save sync state database to JSON file atomically."""
+        """Save sync state database to JSON file atomically with secure permissions."""
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = self.state_path.with_suffix(".tmp")
             with open(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
+            try:
+                os.chmod(tmp_path, 0o600)
+            except Exception:
+                pass
             tmp_path.replace(self.state_path)
+            try:
+                os.chmod(self.state_path, 0o600)
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Failed to save sync state: {e}")
 

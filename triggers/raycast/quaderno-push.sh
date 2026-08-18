@@ -17,6 +17,9 @@ if [ -z "$TARGET_URL" ]; then
   exit 1
 fi
 
+API_KEY="${QUADERNO_API_KEY:-$(grep '^QUADERNO_API_KEY=' "$HOME/.config/quaderno/.env" 2>/dev/null | cut -d '=' -f2-)}"
+
 curl -s -X POST http://localhost:5000/api/agent/push \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: $API_KEY" \
   -d "{\"url\":\"$TARGET_URL\"}" | grep -o '"message":[^,]*' || echo "Pushed to Quaderno"
