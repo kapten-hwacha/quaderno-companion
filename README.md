@@ -7,7 +7,7 @@ The agent ingests web pages, academic papers, and reading materials, optimizes t
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                       Input Triggers                        │
-│  (Browser Extension / Bookmarklet / Raycast / CLI / Hotkeys)│
+│   (Menu Bar App / Raycast / CLI / Browser Tab Push)        │
 └──────────────────────────────┬──────────────────────────────┘
                                │ HTTP / JSON API
                                ▼
@@ -247,34 +247,7 @@ In the macOS Menu Bar app, use the inline segmented control directly beneath the
 [ ⚡ Gemini API | 📚 NotebookLM ]
 ```
 
----
-
-### 6. 🌐 Chrome & Chromium Extension (Manifest V3)
-1. In Chrome/Brave/Arc/Edge, navigate to `chrome://extensions`.
-2. Enable **Developer mode** (top right toggle).
-3. Click **Load unpacked** and select the `triggers/chrome-extension/` directory (or unpack `dist/quaderno-chrome-extension-v*.zip`).
-4. Click the Quaderno toolbar icon to send or summarize the active tab.
-
----
-
-### 7. 🦊 Firefox Extension
-1. In Firefox, navigate to `about:debugging#/runtime/this-firefox`.
-2. Click **Load Temporary Add-on...**.
-3. Select `manifest.json` inside the `triggers/firefox-extension/` directory (or unpack `dist/quaderno-firefox-extension-v*.zip`).
-4. Now you can click the Quaderno icon in your toolbar or right-click any web page / link and select **"Send Page to Quaderno"** or **"Summarize & Send to Quaderno"**.
-
----
-
-### 8. 🌐 Browser Bookmarklet (Universal 1-Click Push)
-Create a new bookmark with this URL:
-
-```javascript
-javascript:(function(){fetch('http://localhost:5000/api/agent/push',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:window.location.href,title:document.title})}).then(r=>r.json()).then(d=>alert('Pushed to Quaderno: '+d.details.title)).catch(e=>alert('Error pushing to Quaderno: '+e));})();
-```
-
----
-
-### 9. ⚡ Raycast Script Commands
+### 6. ⚡ Raycast Script Commands
 Symlink or copy the scripts in `triggers/raycast/` to your Raycast scripts directory:
 - `quaderno-next.sh` (e.g. mapped to foot pedal or shortcut)
 - `quaderno-prev.sh`
