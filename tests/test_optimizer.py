@@ -98,3 +98,36 @@ def test_multipage_uniform_crop_dimensions():
     # Both pages should render to standard A4 target dimensions
     assert out_doc[0].rect == out_doc[1].rect
     out_doc.close()
+
+
+def test_optimizer_preserves_toc():
+    """Verify that EinkOptimizer preserves document bookmarks and TOC structure."""
+    doc = fitz.open()
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_text((100, 100), "Chapter 1 Content")
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_text((100, 100), "Chapter 2 Content")
+    p3 = doc.new_page(width=595, height=842)
+    p3.insert_text((100, 100), "Section 2.1 Content")
+
+    toc_input = [
+        [1, "Chapter 1: Intro", 1],
+        [1, "Chapter 2: Methods", 2],
+        [2, "Section 2.1: Details", 3],
+    ]
+    doc.set_toc(toc_input)
+    src_bytes = doc.tobytes()
+    doc.close()
+
+    optimizer = EinkOptimizer(profile_name="A4")
+    out_bytes = optimizer.optimize_pdf(src_bytes, trim_margins=True)
+
+    out_doc = fitz.open(stream=out_bytes, filetype="pdf")
+    toc_output = out_doc.get_toc()
+    out_doc.close()
+
+    assert len(toc_output) == 3
+    assert toc_output[0][:3] == [1, "Chapter 1: Intro", 1]
+    assert toc_output[1][:3] == [1, "Chapter 2: Methods", 2]
+    assert toc_output[2][:3] == [2, "Section 2.1: Details", 3]
+

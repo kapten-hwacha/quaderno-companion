@@ -188,6 +188,14 @@ class EinkOptimizer:
                     clip=content_rect,
                 )
 
+        # Preserve original TOC / bookmark outlines in the optimized output document
+        try:
+            toc = doc.get_toc()
+            if toc:
+                out_doc.set_toc(toc)
+        except Exception as e:
+            logger.debug(f"Could not preserve TOC in optimized PDF: {e}")
+
         doc.close()
 
         # Compress output PDF streams for lightweight transmission
