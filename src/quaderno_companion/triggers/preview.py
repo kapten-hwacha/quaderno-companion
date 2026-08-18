@@ -8,6 +8,8 @@ import re
 import subprocess
 from typing import Optional, Tuple
 
+import sys
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,103 +24,177 @@ def _applescript_quote(s: str, max_len: Optional[int] = None) -> str:
 
 
 def notify(title: str, subtitle: str, message: str):
-    """Display native macOS notification safely without AppleScript syntax errors."""
-    safe_title = _applescript_quote(title, 80)
-    safe_subtitle = _applescript_quote(subtitle, 80)
-    safe_msg = _applescript_quote(message, 200)
-    script = f"display notification {safe_msg} with title {safe_title} subtitle {safe_subtitle}"
+    """Display native desktop notification across macOS (osascript) and Linux (notify-send)."""
+    # macOS
+    if sys.platform == "darwin":
+        safe_title = _applescript_quote(title, 80)
+        safe_subtitle = _applescript_quote(subtitle, 80)
+        safe_msg = _applescript_quote(message, 200)
+        script = f"display notification {safe_msg} with title {safe_title} subtitle {safe_subtitle}"
+        try:
+            subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            return
+        except Exception:
+            pass
+
+    # Linux (notify-send)
+    body = f"{subtitle}\n{message}" if subtitle else message
     try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+        subprocess.run(["notify-send", title, body], capture_output=True, check=False)
     except Exception:
-        pass
+        logger.info(f"[Notification] {title} - {body}")
 
 
 def show_alert(title: str, message: str):
-    """Display an inescapable foreground alert dialog on macOS."""
-    safe_title = _applescript_quote(title, 100)
-    safe_msg = _applescript_quote(message, 1000)
-    script = f"""
-    tell application "System Events"
-        activate
-        display alert {safe_title} message {safe_msg} as warning
-    end tell
-    """
+    """Display an inescapable foreground alert dialog on macOS or Linux."""
+    # macOS
+    if sys.platform == "darwin":
+        safe_title = _applescript_quote(title, 100)
+        safe_msg = _applescript_quote(message, 1000)
+        script = f"""
+        tell application "System Events"
+            activate
+            display alert {safe_title} message {safe_msg} as warning
+        end tell
+        """
+        try:
+            subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            return
+        except Exception:
+            pass
+
+    # Linux (zenity / kdialog)
     try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+        subprocess.run(["zenity", "--warning", f"--title={title}", f"--text={message}"], capture_output=True, check=False)
+        return
     except Exception:
         pass
 
+    try:
+        subprocess.run(["kdialog", "--sorry", message, f"--title={title}"], capture_output=True, check=False)
+        return
+    except Exception:
+        pass
+
+    logger.warning(f"[Alert] {title}: {message}")
+
 
 def prompt_text_dialog(title: str, prompt: str, default_text: str = "") -> Optional[str]:
-    """Display a native foreground input prompt dialog on macOS that always comes to front."""
-    safe_title = _applescript_quote(title, 100)
-    safe_prompt = _applescript_quote(prompt, 500)
-    safe_default = _applescript_quote(default_text, 1000)
+    """Display a native foreground input prompt dialog on macOS or Linux."""
+    # macOS
+    if sys.platform == "darwin":
+        safe_title = _applescript_quote(title, 100)
+        safe_prompt = _applescript_quote(prompt, 500)
+        safe_default = _applescript_quote(default_text, 1000)
 
-    script = f"""
-    tell application "System Events"
-        activate
-        set res to display dialog {safe_prompt} default answer {safe_default} with title {safe_title} buttons {{"Cancel", "OK"}} default button "OK"
-        return text returned of res
-    end tell
-    """
+        script = f"""
+        tell application "System Events"
+            activate
+            set res to display dialog {safe_prompt} default answer {safe_default} with title {safe_title} buttons {{"Cancel", "OK"}} default button "OK"
+            return text returned of res
+        end tell
+        """
+        try:
+            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            if res.returncode == 0:
+                return res.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    # Linux (zenity / kdialog)
     try:
-        res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+        res = subprocess.run(
+            ["zenity", "--entry", f"--title={title}", f"--text={prompt}", f"--entry-text={default_text}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         if res.returncode == 0:
             return res.stdout.strip()
     except Exception:
         pass
+
+    try:
+        res = subprocess.run(
+            ["kdialog", "--inputbox", prompt, default_text, f"--title={title}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0:
+            return res.stdout.strip()
+    except Exception:
+        pass
+
     return None
 
 
 def prompt_delete_previous_dialog(prev_title: str) -> bool:
     """Prompt user with native dialog whether to delete previously pushed document."""
     msg = f"Do you want to delete the previously pushed document from your Quaderno?\n\nPrevious Document:\n'{prev_title[:80]}'"
-    safe_msg = _applescript_quote(msg, 500)
-    safe_title = _applescript_quote("Quaderno Companion", 80)
-    script = f"""
-    tell application "System Events"
-        activate
-        set res to display dialog {safe_msg} with title {safe_title} buttons {{"Keep", "Delete"}} default button 1 cancel button 1
-        return button returned of res
-    end tell
-    """
+
+    # macOS
+    if sys.platform == "darwin":
+        safe_msg = _applescript_quote(msg, 500)
+        safe_title = _applescript_quote("Quaderno Companion", 80)
+        script = f"""
+        tell application "System Events"
+            activate
+            set res to display dialog {safe_msg} with title {safe_title} buttons {{"Keep", "Delete"}} default button 1 cancel button 1
+            return button returned of res
+        end tell
+        """
+        try:
+            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            return res.returncode == 0 and "Delete" in res.stdout
+        except Exception:
+            return False
+
+    # Linux (zenity / kdialog)
     try:
-        res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
-        return res.returncode == 0 and "Delete" in res.stdout
+        res = subprocess.run(
+            ["zenity", "--question", "--title=Quaderno Companion", f"--text={msg}", "--ok-label=Delete", "--cancel-label=Keep"],
+            capture_output=True,
+            check=False,
+        )
+        return res.returncode == 0
     except Exception:
-        return False
+        pass
+
+    return False
 
 
 # Setup C-level macOS ApplicationServices & CoreFoundation for sub-millisecond Accessibility extraction
 _app_services = None
 _core_foundation = None
-try:
-    _as_path = ctypes.util.find_library("ApplicationServices")
-    _cf_path = ctypes.util.find_library("CoreFoundation")
-    if _as_path and _cf_path:
-        _app_services = ctypes.cdll.LoadLibrary(_as_path)
-        _core_foundation = ctypes.cdll.LoadLibrary(_cf_path)
-        if _core_foundation and _app_services:
-            _core_foundation.CFStringCreateWithCString.restype = ctypes.c_void_p
-            _core_foundation.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
-            _core_foundation.CFArrayGetCount.restype = ctypes.c_long
-            _core_foundation.CFArrayGetCount.argtypes = [ctypes.c_void_p]
-            _core_foundation.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
-            _core_foundation.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
-            _core_foundation.CFStringGetCString.restype = ctypes.c_bool
-            _core_foundation.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
-            _core_foundation.CFGetTypeID.restype = ctypes.c_long
-            _core_foundation.CFGetTypeID.argtypes = [ctypes.c_void_p]
-            _core_foundation.CFStringGetTypeID.restype = ctypes.c_long
+if sys.platform == "darwin":
+    try:
+        _as_path = ctypes.util.find_library("ApplicationServices")
+        _cf_path = ctypes.util.find_library("CoreFoundation")
+        if _as_path and _cf_path:
+            _app_services = ctypes.cdll.LoadLibrary(_as_path)
+            _core_foundation = ctypes.cdll.LoadLibrary(_cf_path)
+            if _core_foundation and _app_services:
+                _core_foundation.CFStringCreateWithCString.restype = ctypes.c_void_p
+                _core_foundation.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+                _core_foundation.CFArrayGetCount.restype = ctypes.c_long
+                _core_foundation.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+                _core_foundation.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+                _core_foundation.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+                _core_foundation.CFStringGetCString.restype = ctypes.c_bool
+                _core_foundation.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+                _core_foundation.CFGetTypeID.restype = ctypes.c_long
+                _core_foundation.CFGetTypeID.argtypes = [ctypes.c_void_p]
+                _core_foundation.CFStringGetTypeID.restype = ctypes.c_long
 
-            _app_services.AXUIElementCreateApplication.restype = ctypes.c_void_p
-            _app_services.AXUIElementCreateApplication.argtypes = [ctypes.c_int]
-            _app_services.AXUIElementCopyAttributeValue.restype = ctypes.c_int
-            _app_services.AXUIElementCopyAttributeValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
-except Exception:
-    _app_services = None
-    _core_foundation = None
+                _app_services.AXUIElementCreateApplication.restype = ctypes.c_void_p
+                _app_services.AXUIElementCreateApplication.argtypes = [ctypes.c_int]
+                _app_services.AXUIElementCopyAttributeValue.restype = ctypes.c_int
+                _app_services.AXUIElementCopyAttributeValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    except Exception:
+        _app_services = None
+        _core_foundation = None
 
 
 def _cf_str(s: str):

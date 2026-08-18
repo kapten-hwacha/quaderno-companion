@@ -166,9 +166,13 @@ def setup_cmd():
     run_api_setup_wizard()
 
     # Step 3: Service installation
-    rprint("\n[bold yellow]Step 3: Background Service & Menu Bar[/bold yellow]")
+    rprint("\n[bold yellow]Step 3: Background Service & Daemon[/bold yellow]")
     if sys.platform == "darwin":
         install_bg = typer.confirm("Would you like to install the background menu bar LaunchAgent?", default=True)
+        if install_bg:
+            install_service()
+    elif sys.platform.startswith("linux"):
+        install_bg = typer.confirm("Would you like to install the background systemd user service?", default=True)
         if install_bg:
             install_service()
 
@@ -481,33 +485,43 @@ def sync_cmd(
 
 @app.command(name="open")
 def open_cmd():
-    """Open the local Quaderno mirror folder in macOS Finder."""
+    """Open the local Quaderno mirror folder in the file manager."""
     import subprocess
     target_dir = settings.sync_dir
     target_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["open", str(target_dir)], check=False)
+    if sys.platform == "darwin":
+        subprocess.run(["open", str(target_dir)], check=False)
+    else:
+        # Linux / Unix fallback
+        subprocess.run(["xdg-open", str(target_dir)], check=False)
     rprint(f"[bold green]✓[/bold green] Opened local Quaderno folder at [bold cyan]{target_dir}[/bold cyan]")
 
 
 @app.command(name="app")
 def launch_app():
-    """Launch the native macOS Menu Bar background companion."""
-    from quaderno_companion.triggers.menubar import start_menubar_app
-    start_menubar_app(start_server=True)
+    """Launch the background companion (Menu Bar app on macOS, daemon on Linux)."""
+    if sys.platform == "darwin":
+        from quaderno_companion.triggers.menubar import start_menubar_app
+        start_menubar_app(start_server=True)
+    else:
+        # On Linux, run the background server daemon directly
+        rprint("[bold cyan]Starting Quaderno Companion server daemon...[/bold cyan]")
+        from quaderno_companion.server import start_server
+        start_server(host=settings.server_host, port=settings.server_port)
 
 
 @app.command(name="install-service")
 def install_service():
-    """Install and start the background daemon as a macOS LaunchAgent (auto-start on login)."""
+    """Install and start the background daemon service (macOS LaunchAgent or Linux systemd user service)."""
     import subprocess
-
-    plist_dir = Path.home() / "Library" / "LaunchAgents"
-    plist_dir.mkdir(parents=True, exist_ok=True)
-    plist_path = plist_dir / "com.quaderno.companion.plist"
-
     python_bin = sys.executable
 
-    plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+    if sys.platform == "darwin":
+        plist_dir = Path.home() / "Library" / "LaunchAgents"
+        plist_dir.mkdir(parents=True, exist_ok=True)
+        plist_path = plist_dir / "com.quaderno.companion.plist"
+
+        plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -531,23 +545,67 @@ def install_service():
 </dict>
 </plist>
 """
-    plist_path.write_text(plist_content)
-    subprocess.run(["launchctl", "load", "-w", str(plist_path)], check=False)
-    rprint(f"[bold green]✓[/bold green] Installed background service to [cyan]{plist_path}[/cyan]")
-    rprint("[green]The Quaderno Companion menu bar app is now running in the background and will start on login.[/green]")
+        plist_path.write_text(plist_content)
+        subprocess.run(["launchctl", "load", "-w", str(plist_path)], check=False)
+        rprint(f"[bold green]✓[/bold green] Installed background service to [cyan]{plist_path}[/cyan]")
+        rprint("[green]The Quaderno Companion menu bar app is now running in the background and will start on login.[/green]")
+    elif sys.platform.startswith("linux"):
+        systemd_dir = Path.home() / ".config" / "systemd" / "user"
+        systemd_dir.mkdir(parents=True, exist_ok=True)
+        service_path = systemd_dir / "quaderno-companion.service"
+
+        log_dir = Path.home() / ".config" / "quaderno"
+        log_dir.mkdir(parents=True, exist_ok=True)
+
+        service_content = f"""[Unit]
+Description=Quaderno Companion Background Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={python_bin} -m quaderno_companion.cli app
+Restart=always
+RestartSec=5
+StandardOutput=append:{log_dir}/companion.log
+StandardError=append:{log_dir}/companion.err
+
+[Install]
+WantedBy=default.target
+"""
+        service_path.write_text(service_content)
+        subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+        subprocess.run(["systemctl", "--user", "enable", "--now", "quaderno-companion.service"], check=False)
+        rprint(f"[bold green]✓[/bold green] Installed systemd user service to [cyan]{service_path}[/cyan]")
+        rprint("[green]The Quaderno Companion daemon is now running and will auto-start on login.[/green]")
+    else:
+        rprint("[yellow]Background service auto-installation is supported on macOS and Linux.[/yellow]")
 
 
 @app.command(name="uninstall-service")
 def uninstall_service():
-    """Uninstall the macOS LaunchAgent background service."""
+    """Uninstall the background service (macOS LaunchAgent or Linux systemd user service)."""
     import subprocess
-    plist_path = Path.home() / "Library" / "LaunchAgents" / "com.quaderno.companion.plist"
-    if plist_path.exists():
-        subprocess.run(["launchctl", "unload", str(plist_path)], check=False)
-        plist_path.unlink()
-        rprint("[bold green]✓[/bold green] Uninstalled Quaderno background LaunchAgent.")
+
+    if sys.platform == "darwin":
+        plist_path = Path.home() / "Library" / "LaunchAgents" / "com.quaderno.companion.plist"
+        if plist_path.exists():
+            subprocess.run(["launchctl", "unload", str(plist_path)], check=False)
+            plist_path.unlink()
+            rprint("[bold green]✓[/bold green] Uninstalled Quaderno background LaunchAgent.")
+        else:
+            rprint("[yellow]Service plist not found.[/yellow]")
+    elif sys.platform.startswith("linux"):
+        service_path = Path.home() / ".config" / "systemd" / "user" / "quaderno-companion.service"
+        if service_path.exists():
+            subprocess.run(["systemctl", "--user", "stop", "quaderno-companion.service"], check=False)
+            subprocess.run(["systemctl", "--user", "disable", "quaderno-companion.service"], check=False)
+            service_path.unlink()
+            subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
+            rprint("[bold green]✓[/bold green] Uninstalled Quaderno systemd user service.")
+        else:
+            rprint("[yellow]Systemd service file not found.[/yellow]")
     else:
-        rprint("[yellow]Service plist not found.[/yellow]")
+        rprint("[yellow]Unsupported platform for service uninstall.[/yellow]")
 
 
 notebook_app = typer.Typer(

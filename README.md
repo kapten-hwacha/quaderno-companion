@@ -87,9 +87,9 @@ The primary way to use Quaderno Companion is as a **native macOS Menu Bar app** 
 
 ---
 
-### Option B: Automatic macOS Service via `uv` *(For Developers / Terminal Users)*
+### Option B: Automatic Background Service via `uv` *(macOS & Linux)*
 
-If running from source or via the `uv` toolchain, you can install the background LaunchAgent service in a single step:
+If running from source or via the `uv` toolchain, you can configure and install the background service in a single step:
 
 ```bash
 # 1. Clone repository & install dependencies
@@ -97,7 +97,7 @@ git clone https://github.com/your-username/quaderno-companion.git
 cd quaderno-companion
 uv sync
 
-# 2. Run the interactive setup wizard (pairs device, configures API key, & installs LaunchAgent)
+# 2. Run the interactive setup wizard (pairs device, configures API key, & installs service)
 uv run quadctl setup
 ```
 
@@ -107,12 +107,14 @@ Or install the auto-starting background service directly:
 # 1. One-time device pairing:
 uv run quadctl pair
 
-# 2. Install background macOS LaunchAgent (auto-starts menu bar app + daemon on every login):
+# 2. Install background service (macOS LaunchAgent or Linux systemd user service):
 uv run quadctl install-service
 ```
 
 > [!TIP]
-> To stop or remove the auto-starting background service at any time: `uv run quadctl uninstall-service`.
+> - **macOS**: Installs `~/Library/LaunchAgents/com.quaderno.companion.plist` running the Menu Bar companion.
+> - **Linux**: Installs `~/.config/systemd/user/quaderno-companion.service` running the background daemon.
+> - To stop or remove the auto-starting background service at any time: `uv run quadctl uninstall-service`.
 
 ---
 

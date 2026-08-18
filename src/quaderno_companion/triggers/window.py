@@ -23,6 +23,8 @@ except Exception:
 from quaderno_companion.config import settings
 from quaderno_companion.pipeline.optimizer import EinkOptimizer
 
+import sys
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,12 +45,73 @@ def crop_to_aspect_ratio(img: Image.Image, target_w: int, target_h: int) -> Imag
         return img.crop((0, top, img.width, top + new_height))
 
 
+def _capture_screen_to_file(target_png_path: str, front_win_id: Optional[Any] = None) -> bool:
+    """Capture screen or window across macOS (screencapture) and Linux (grim, maim, scrot, import)."""
+    # 1. macOS
+    if sys.platform == "darwin":
+        try:
+            if front_win_id:
+                res = subprocess.run(
+                    ["screencapture", "-l", str(front_win_id), "-o", "-x", target_png_path],
+                    capture_output=True,
+                    check=False,
+                )
+                if res.returncode == 0:
+                    return True
+            res = subprocess.run(
+                ["screencapture", "-m", "-x", target_png_path],
+                capture_output=True,
+                check=False,
+            )
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    # 2. Linux Wayland (grim)
+    try:
+        res = subprocess.run(["grim", target_png_path], capture_output=True, check=False)
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    # 3. Linux X11 (maim active window or root)
+    try:
+        if front_win_id:
+            res = subprocess.run(["maim", "-i", str(front_win_id), target_png_path], capture_output=True, check=False)
+            if res.returncode == 0:
+                return True
+        res = subprocess.run(["maim", target_png_path], capture_output=True, check=False)
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    # 4. Linux X11 (scrot)
+    try:
+        res = subprocess.run(["scrot", target_png_path], capture_output=True, check=False)
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    # 5. Linux ImageMagick (import)
+    try:
+        res = subprocess.run(["import", "-window", "root", target_png_path], capture_output=True, check=False)
+        if res.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 def capture_active_window_pdf(
     profile_name: Optional[str] = None,
     auto_rotate: bool = True,
     crop_to_fill: bool = True,
 ) -> Tuple[Path, str, str]:
-    """Capture the frontmost active macOS window and convert it to an E-ink optimized PDF.
+    """Capture the frontmost active window and convert it to an E-ink optimized PDF.
 
     Args:
         profile_name: Target device profile ('A4' or 'A5').
@@ -63,6 +126,7 @@ def capture_active_window_pdf(
     win_title = ""
     front_win_id = None
 
+    # macOS AppKit / Quartz resolution
     try:
         if AppKit:
             app = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
@@ -84,8 +148,8 @@ def capture_active_window_pdf(
     except Exception as e:
         logger.debug(f"Error resolving window via Quartz: {e}")
 
-    # Fallback to AppleScript if title wasn't found
-    if not win_title:
+    # Fallback to AppleScript on macOS
+    if not win_title and sys.platform == "darwin":
         try:
             script = """
             tell application "System Events"
@@ -102,27 +166,28 @@ def capture_active_window_pdf(
         except Exception:
             pass
 
+    # Fallback to Linux X11 xdotool
+    if not win_title and not sys.platform == "darwin":
+        try:
+            wid_str = subprocess.check_output(["xdotool", "getactivewindow"], text=True, timeout=1.0, stderr=subprocess.DEVNULL).strip()
+            if wid_str:
+                front_win_id = wid_str
+                win_title = subprocess.check_output(["xdotool", "getactivewindow", "getwindowname"], text=True, timeout=1.0, stderr=subprocess.DEVNULL).strip()
+                pid_str = subprocess.check_output(["xdotool", "getactivewindow", "getwindowpid"], text=True, timeout=1.0, stderr=subprocess.DEVNULL).strip()
+                if pid_str:
+                    comm_path = Path(f"/proc/{pid_str}/comm")
+                    if comm_path.exists():
+                        app_name = comm_path.read_text().strip()
+        except Exception:
+            pass
+
     display_title = f"{app_name} - {win_title}" if win_title else app_name
 
     # Capture window screenshot
     tmp_png = tempfile.NamedTemporaryFile(suffix=".png", delete=False).name
-    try:
-        if front_win_id:
-            subprocess.run(
-                ["screencapture", "-l", str(front_win_id), "-o", "-x", tmp_png],
-                check=True,
-                capture_output=True,
-            )
-        else:
-            # Fallback to main screen capture
-            subprocess.run(
-                ["screencapture", "-m", "-x", tmp_png],
-                check=True,
-                capture_output=True,
-            )
-    except Exception as e:
-        logger.error(f"screencapture failed: {e}")
-        raise RuntimeError(f"Could not capture active window: {e}") from e
+    ok = _capture_screen_to_file(tmp_png, front_win_id=front_win_id)
+    if not ok:
+        raise RuntimeError("Could not capture active window (screencapture/grim/maim/scrot/import not available or failed)")
 
     # Convert captured PNG into a high-contrast E-ink PDF
     from quaderno_companion.config import SCREEN_PROFILES

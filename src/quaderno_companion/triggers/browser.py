@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from typing import Any, Dict, List, Optional
 import lz4.block
@@ -33,41 +34,74 @@ def _decompress_mozlz4(data: bytes) -> Optional[dict]:
         return None
 
 
+def get_firefox_profile_dirs() -> List[Path]:
+    """Find Firefox profile directories across Linux (native, Flatpak, Snap) and macOS."""
+    candidates = [
+        # macOS
+        Path.home() / "Library/Application Support/Firefox/Profiles",
+        # Linux Native / Distro
+        Path.home() / ".mozilla/firefox",
+        # Linux Flatpak
+        Path.home() / ".var/app/org.mozilla.firefox/.mozilla/firefox",
+        # Linux Snap
+        Path.home() / "snap/firefox/common/.mozilla/firefox",
+        # Librewolf / Waterfox Linux
+        Path.home() / ".librewolf",
+        Path.home() / ".waterfox",
+    ]
+    dirs = []
+    for c in candidates:
+        if c.exists():
+            dirs.append(c)
+    return dirs
+
+
 def get_firefox_window_title() -> Optional[str]:
-    """Get the active window title of Firefox via AppleScript."""
-    script = '''
-    tell application "System Events"
-        if exists (process "Firefox") then
-            tell process "Firefox"
-                try
-                    return name of front window
-                end try
-            end tell
-        end if
-    end tell
-    '''
+    """Get the active window title of Firefox via AppleScript (macOS) or xdotool/xprop (Linux)."""
+    # macOS AppleScript
+    if sys.platform == "darwin":
+        script = '''
+        tell application "System Events"
+            if exists (process "Firefox") then
+                tell process "Firefox"
+                    try
+                        return name of front window
+                    end try
+                end tell
+            end if
+        end tell
+        '''
+        try:
+            res = subprocess.check_output(["osascript", "-e", script], text=True, timeout=1.5).strip()
+            if res and res != "missing value":
+                return res
+        except Exception:
+            pass
+
+    # Linux X11 window title via xdotool
     try:
-        res = subprocess.check_output(["osascript", "-e", script], text=True, timeout=1.5).strip()
-        if res and res != "missing value":
+        res = subprocess.check_output(["xdotool", "getactivewindow", "getwindowname"], text=True, timeout=1.0, stderr=subprocess.DEVNULL).strip()
+        if res:
             return res
     except Exception:
         pass
+
     return None
 
 
 def get_firefox_active_tab() -> Optional[Dict[str, str]]:
     """Extract real-time active tab title and URL directly from Firefox with 0ms latency."""
-    ff_dir = Path.home() / "Library/Application Support/Firefox/Profiles"
-    if not ff_dir.exists():
+    profile_dirs = get_firefox_profile_dirs()
+    if not profile_dirs:
         return None
 
     # Method 1: Instantaneous Real-time History Database (places.sqlite)
     db_profiles = []
-    try:
-        if ff_dir.is_dir():
-            db_profiles = [p for p in ff_dir.iterdir() if p.is_dir() and (p / "places.sqlite").is_file()]
-    except Exception:
-        db_profiles = []
+    for ff_dir in profile_dirs:
+        try:
+            db_profiles.extend([p for p in ff_dir.iterdir() if p.is_dir() and (p / "places.sqlite").is_file()])
+        except Exception:
+            pass
 
     if db_profiles:
         latest_profile = max(db_profiles, key=lambda p: (p / "places.sqlite").stat().st_mtime)
@@ -115,8 +149,16 @@ def get_firefox_active_tab() -> Optional[Dict[str, str]]:
 
     # Method 2: Fallback to Session Store recovery.jsonlz4
     recovery_files: List[Path] = []
-    for pattern in ["*/sessionstore-backups/recovery.jsonlz4", "*/sessionstore-backups/recovery.baklz4", "*/sessionstore.jsonlz4"]:
-        recovery_files.extend(ff_dir.glob(pattern))
+    for ff_dir in profile_dirs:
+        for pattern in [
+            "*/sessionstore-backups/recovery.jsonlz4",
+            "*/sessionstore-backups/recovery.baklz4",
+            "*/sessionstore.jsonlz4",
+            "sessionstore-backups/recovery.jsonlz4",
+            "sessionstore-backups/recovery.baklz4",
+            "sessionstore.jsonlz4",
+        ]:
+            recovery_files.extend(ff_dir.glob(pattern))
 
     if not recovery_files:
         return None
@@ -202,7 +244,8 @@ def get_chromium_active_tab(app_name: str = "Google Chrome") -> Optional[Dict[st
 
 
 def get_frontmost_app_name() -> str:
-    """Return the process name of the current frontmost application in ~0.05ms."""
+    """Return the process/app name of the current frontmost application in ~0.05ms."""
+    # macOS AppKit
     try:
         if AppKit:
             app = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
@@ -210,11 +253,26 @@ def get_frontmost_app_name() -> str:
                 return str(app.localizedName() or "")
     except Exception:
         pass
-    script = 'tell application "System Events" to return name of first application process whose frontmost is true'
+
+    # macOS AppleScript fallback
+    if sys.platform == "darwin":
+        script = 'tell application "System Events" to return name of first application process whose frontmost is true'
+        try:
+            return subprocess.check_output(["osascript", "-e", script], text=True, timeout=1.5).strip()
+        except Exception:
+            pass
+
+    # Linux X11 fallback (xdotool / /proc)
     try:
-        return subprocess.check_output(["osascript", "-e", script], text=True, timeout=1.5).strip()
+        pid_str = subprocess.check_output(["xdotool", "getactivewindow", "getwindowpid"], text=True, timeout=1.0, stderr=subprocess.DEVNULL).strip()
+        if pid_str:
+            comm_path = Path(f"/proc/{pid_str}/comm")
+            if comm_path.exists():
+                return comm_path.read_text().strip()
     except Exception:
-        return ""
+        pass
+
+    return ""
 
 
 def get_active_browser_tab() -> Optional[Dict[str, str]]:

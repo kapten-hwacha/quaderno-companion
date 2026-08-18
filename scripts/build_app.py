@@ -98,7 +98,10 @@ def main():
     print(f"=== Building Quaderno Companion v{version} ===")
     ensure_icons()
     run_pyinstaller()
-    build_dmg(version)
+    if sys.platform == "darwin":
+        build_dmg(version)
+    else:
+        print(f"Standalone Linux binary built successfully at: {DIST_DIR / 'quaderno-companion'}")
     print(f"=== Build Completed! Artifacts in {DIST_DIR} ===")
 
 

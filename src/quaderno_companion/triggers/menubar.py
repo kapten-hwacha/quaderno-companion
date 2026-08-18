@@ -15,8 +15,36 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-import rumps
+import sys
 import uvicorn
+
+rumps: Any
+AppKit: Any
+objc: Any
+
+try:
+    import rumps as _rumps  # type: ignore[import-untyped]
+    rumps = _rumps
+except Exception:
+    class _DummyRumps:
+        class MenuItem:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+            def add(self, *args: Any, **kwargs: Any) -> None:
+                pass
+        class App:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                self.menu: Any = []
+            def run(self) -> None:
+                pass
+        class Timer:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+            def start(self) -> None: pass
+            def stop(self) -> None: pass
+        @staticmethod
+        def quit_application() -> None: pass
+    rumps = _DummyRumps()
 
 from quaderno_companion.agent.core import agent
 from quaderno_companion.agent.tools import (
@@ -33,14 +61,57 @@ from quaderno_companion.triggers.preview import (
     show_alert,
 )
 
-import AppKit as _AppKit  # type: ignore[import-untyped]
-import objc as _objc  # type: ignore[import-untyped]
+try:
+    import AppKit as _AppKit  # type: ignore[import-untyped]
+    import objc as _objc  # type: ignore[import-untyped]
+    AppKit = _AppKit
+    objc = _objc
+except Exception:
+    class _DummyAppKit:
+        NSObject = object
+        NSView = object
+        NSMenuItem = object
+        NSSegmentedControl = object
+        NSSlider = object
+        NSTextField = object
+        NSSwitch = object
+        NSApplication = object
+        NSEvent = object
+        NSFont = object
+        NSColor = object
+        NSControlStateValueOn = 1
+        NSControlStateValueOff = 0
+        NSSegmentSwitchTrackingMomentary = 0
+        NSSegmentSwitchTrackingSelectOne = 1
+        NSTickMarkPositionBelow = 0
+        NSFontWeightMedium = 0
+        NSTextAlignmentLeft = 0
+        NSTextAlignmentRight = 1
+        NSLineBreakByClipping = 0
+        NSEventTypeLeftMouseUp = 2
+        @staticmethod
+        def NSMakeRect(*args: Any) -> Any: return None
+        @staticmethod
+        def NSPointInRect(*args: Any) -> bool: return False
 
-AppKit: Any = _AppKit
-objc: Any = _objc
+    class _DummyObjc:
+        @staticmethod
+        def selector(*args: Any, **kwargs: Any) -> Any:
+            def decorator(f: Any) -> Any: return f
+            return decorator
+
+        @staticmethod
+        def super(cls: Any, inst: Any) -> Any:
+            return super(cls, inst)
+
+    AppKit = _DummyAppKit()
+    objc = _DummyObjc()
+
+MenuItemBase: Any = rumps.MenuItem
+AppBase: Any = rumps.App
 
 
-class ToggleMenuItem(rumps.MenuItem):
+class ToggleMenuItem(MenuItemBase):
     """MenuItem that retains custom switch state without triggering macOS checkmark gutter shifts."""
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -68,7 +139,7 @@ class ToggleMenuItem(rumps.MenuItem):
                 pass
 
 
-class QuadernoMenubarApp(rumps.App):
+class QuadernoMenubarApp(AppBase):
     """macOS status bar companion application."""
 
     def __init__(self):
@@ -83,7 +154,7 @@ class QuadernoMenubarApp(rumps.App):
         # Single-row Page Change Controls in 1st subdivision
         self.page_control_item = rumps.MenuItem("")
         try:
-            if not AppKit or not objc:
+            if not AppKit or not objc or type(AppKit).__name__ == "_DummyAppKit":
                 raise ImportError("PyObjC / AppKit is unavailable")
 
             class _NavSegmentHandler(AppKit.NSObject):
@@ -849,15 +920,36 @@ class QuadernoMenubarApp(rumps.App):
         threading.Thread(target=_nav, daemon=True).start()
 
     def _get_clipboard_text(self) -> str:
-        """Get current text from macOS clipboard via pbpaste."""
+        """Get current text from system clipboard (pbpaste on macOS, wl-paste / xclip on Linux)."""
+        if sys.platform == "darwin":
+            try:
+                return subprocess.check_output(["pbpaste"], text=True)
+            except Exception:
+                return ""
+
+        # Linux Wayland
         try:
-            return subprocess.check_output(["pbpaste"], text=True)
+            return subprocess.check_output(["wl-paste"], text=True, timeout=1.0, stderr=subprocess.DEVNULL)
         except Exception:
-            return ""
+            pass
+
+        # Linux X11 (xclip)
+        try:
+            return subprocess.check_output(["xclip", "-selection", "clipboard", "-o"], text=True, timeout=1.0, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+        return ""
 
 
 def start_menubar_app(start_server: bool = True):
     """Launch the background daemon and native macOS menubar application."""
+    if sys.platform != "darwin":
+        # On non-macOS platforms, run the server daemon
+        from quaderno_companion.server import start_server as _run_server
+        _run_server(host=settings.server_host, port=settings.server_port)
+        return
+
     if start_server:
         # Start FastAPI daemon in background thread
         server_thread = threading.Thread(

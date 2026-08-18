@@ -24,9 +24,9 @@ dependencies = [
     "pillow>=10.0.0",
     "setuptools<70",
     "python-multipart>=0.0.9",
-    "rumps>=0.4.0",
+    "rumps>=0.4.0; sys_platform == 'darwin'",
     "lz4>=4.3.0",
-    "pyobjc-framework-quartz>=12.2.2",
+    "pyobjc-framework-quartz>=12.2.2; sys_platform == 'darwin'",
     "notebooklm-py[browser]>=0.8.1",
 ]
 

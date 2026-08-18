@@ -13,6 +13,7 @@ import re
 import socket
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Literal, Optional, Set, Tuple
 
 from quaderno_companion.config import settings
@@ -99,8 +100,49 @@ class NetworkRouter:
         self._cached_route = None
 
     def _get_default_gateways(self) -> List[str]:
-        """Retrieve default gateway IPs from system routing table."""
-        gateways = []
+        """Retrieve default gateway IPs from system routing table across Linux and macOS."""
+        gateways: List[str] = []
+        seen: Set[str] = set()
+
+        def _add(gw: str):
+            clean = gw.strip()
+            if clean and clean != "127.0.0.1" and re.match(r"^\d+\.\d+\.\d+\.\d+$", clean) and clean not in seen:
+                seen.add(clean)
+                gateways.append(clean)
+
+        # Method 1: Linux `ip -4 route show default` or `ip route`
+        try:
+            out = subprocess.check_output(
+                ["ip", "-4", "route", "show", "default"],
+                text=True,
+                timeout=1.0,
+                stderr=subprocess.DEVNULL,
+            )
+            for line in out.splitlines():
+                parts = line.split()
+                if "via" in parts:
+                    idx = parts.index("via")
+                    if idx + 1 < len(parts):
+                        _add(parts[idx + 1])
+        except Exception:
+            pass
+
+        # Method 2: Linux /proc/net/route table (when tools like `ip` are missing)
+        try:
+            route_path = Path("/proc/net/route")
+            if route_path.exists():
+                for line in route_path.read_text(encoding="utf-8").splitlines()[1:]:
+                    fields = line.strip().split()
+                    if len(fields) >= 3 and fields[1] == "00000000":  # Destination default
+                        gw_hex = fields[2]
+                        if len(gw_hex) == 8 and gw_hex != "00000000":
+                            # Little-endian hex to dotted decimal
+                            gw_ip = ".".join(str(int(gw_hex[i:i+2], 16)) for i in (6, 4, 2, 0))
+                            _add(gw_ip)
+        except Exception:
+            pass
+
+        # Method 3: macOS / BSD `netstat -nr -f inet`
         try:
             out = subprocess.check_output(
                 ["netstat", "-nr", "-f", "inet"],
@@ -111,11 +153,10 @@ class NetworkRouter:
             for line in out.splitlines():
                 parts = line.split()
                 if len(parts) >= 2 and parts[0] == "default":
-                    gw = parts[1]
-                    if re.match(r"^\d+\.\d+\.\d+\.\d+$", gw) and gw != "127.0.0.1":
-                        gateways.append(gw)
+                    _add(parts[1])
         except Exception:
             pass
+
         return gateways
 
     def _build_candidate_list(self) -> List[DeviceRoute]:

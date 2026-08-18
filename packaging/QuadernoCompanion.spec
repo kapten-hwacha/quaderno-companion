@@ -35,13 +35,6 @@ hidden_imports = [
     "pydantic",
     "pydantic_settings",
     "python_multipart",
-    # macOS Native PyObjC & UI
-    "rumps",
-    "AppKit",
-    "Quartz",
-    "Foundation",
-    "objc",
-    "PyObjCTools",
     # PDF, Images, Compression & Low-level
     "fitz",
     "PIL",
@@ -62,6 +55,16 @@ hidden_imports = [
     "rich",
     "jinja2",
 ]
+
+if sys.platform == "darwin":
+    hidden_imports.extend([
+        "rumps",
+        "AppKit",
+        "Quartz",
+        "Foundation",
+        "objc",
+        "PyObjCTools",
+    ])
 
 a = Analysis(
     [str(PROJECT_ROOT / "packaging" / "app_launcher.py")],
@@ -86,7 +89,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Quaderno Companion",
+    name="quaderno-companion",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -107,27 +110,28 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="Quaderno Companion",
+    name="quaderno-companion",
 )
 
-app = BUNDLE(
-    coll,
-    name="Quaderno Companion.app",
-    icon=str(PROJECT_ROOT / "packaging" / "assets" / "QuadernoCompanion.icns"),
-    bundle_identifier="com.quaderno.companion",
-    info_plist={
-        "CFBundleName": "Quaderno Companion",
-        "CFBundleDisplayName": "Quaderno Companion",
-        "CFBundleIdentifier": "com.quaderno.companion",
-        "CFBundleVersion": "0.1.0",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundlePackageType": "APPL",
-        "CFBundleExecutable": "Quaderno Companion",
-        "CFBundleIconFile": "QuadernoCompanion.icns",
-        "LSUIElement": True,  # Menu Bar background app (no Dock icon)
-        "NSHighResolutionCapable": True,
-        "NSRequiresAquaSystemAppearance": False,
-        "NSSupportsAutomaticGraphicsSwitching": True,
-        "NSHumanReadableCopyright": "Copyright © 2026 Karl-Andres Parts. All rights reserved.",
-    },
-)
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="Quaderno Companion.app",
+        icon=str(PROJECT_ROOT / "packaging" / "assets" / "QuadernoCompanion.icns"),
+        bundle_identifier="com.quaderno.companion",
+        info_plist={
+            "CFBundleName": "Quaderno Companion",
+            "CFBundleDisplayName": "Quaderno Companion",
+            "CFBundleIdentifier": "com.quaderno.companion",
+            "CFBundleVersion": "0.1.0",
+            "CFBundleShortVersionString": "0.1.0",
+            "CFBundlePackageType": "APPL",
+            "CFBundleExecutable": "quaderno-companion",
+            "CFBundleIconFile": "QuadernoCompanion.icns",
+            "LSUIElement": True,  # Menu Bar background app (no Dock icon)
+            "NSHighResolutionCapable": True,
+            "NSRequiresAquaSystemAppearance": False,
+            "NSSupportsAutomaticGraphicsSwitching": True,
+            "NSHumanReadableCopyright": "Copyright © 2026 Karl-Andres Parts. All rights reserved.",
+        },
+    )
