@@ -14,8 +14,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
 
-import pymupdf as fitz
-
 from quaderno_companion.config import settings
 from quaderno_companion.device.client import (
     DeviceNotConnectedError,
@@ -82,6 +80,7 @@ def extract_pdf_toc(pdf_bytes: bytes) -> List[Tuple[str, int]]:
     
     # 1. Primary: Use PyMuPDF (fitz)
     try:
+        import pymupdf as fitz
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         toc = doc.get_toc()
         doc.close()
@@ -292,6 +291,7 @@ class QuadernoDeviceManager:
         total_pages = 1
         raw_toc = []
         try:
+            import pymupdf as fitz
             doc = fitz.open(stream=pdf_bytes, filetype="pdf")
             total_pages = max(1, doc.page_count)
             doc.close()

@@ -14,13 +14,8 @@ import socket
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 import httpx
-from bs4 import BeautifulSoup
-import pymupdf as fitz
-from readability import Document
 
 from quaderno_companion.config import settings
-from quaderno_companion.pipeline.optimizer import EinkOptimizer
-from quaderno_companion.pipeline.templates import EinkDocumentBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +34,13 @@ SENSITIVE_FILENAME_SUBSTRINGS = (
 
 @dataclass
 class FetchedDocument:
-    """Represents an ingested document ready for transmission."""
+    """Document fetched and prepared for Quaderno upload."""
+
     title: str
     pdf_bytes: bytes
     source_url: Optional[str] = None
-    filename: str = "document.pdf"
-    content_hash: str = ""
+    filename: Optional[str] = None
+    content_hash: Optional[str] = None
 
     def __post_init__(self):
         if not self.content_hash and self.pdf_bytes:
@@ -56,8 +52,22 @@ class ContentFetcher:
 
     def __init__(self, profile_name: Optional[str] = None):
         self.profile = profile_name or settings.default_profile
-        self.optimizer = EinkOptimizer(profile_name=self.profile)
-        self.builder = EinkDocumentBuilder(profile_name=self.profile)
+        self._optimizer = None
+        self._builder = None
+
+    @property
+    def optimizer(self):
+        if self._optimizer is None:
+            from quaderno_companion.pipeline.optimizer import EinkOptimizer
+            self._optimizer = EinkOptimizer(profile_name=self.profile)
+        return self._optimizer
+
+    @property
+    def builder(self):
+        if self._builder is None:
+            from quaderno_companion.pipeline.templates import EinkDocumentBuilder
+            self._builder = EinkDocumentBuilder(profile_name=self.profile)
+        return self._builder
 
     def _validate_remote_url(self, url: str) -> None:
         """Validate URL to prevent SSRF against loopback, private networks, and cloud metadata."""
@@ -238,6 +248,7 @@ class ContentFetcher:
             )
 
         elif suffix in (".jpg", ".jpeg", ".png", ".webp"):
+            import pymupdf as fitz
             img_doc = fitz.open(str(path))
             pdf_bytes_tmp = img_doc.convert_to_pdf()
             img_doc.close()
@@ -338,6 +349,9 @@ class ContentFetcher:
         custom_title: Optional[str] = None,
     ) -> FetchedDocument:
         """Extract readable article content from HTML (including tables) and format as E-ink PDF."""
+        from readability import Document
+        from bs4 import BeautifulSoup
+
         doc = Document(html_text)
         title = custom_title or doc.title()
         cleaned_html = doc.summary(html_partial=True)

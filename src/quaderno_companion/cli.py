@@ -20,7 +20,6 @@ from quaderno_companion.agent.tools import (
 )
 from quaderno_companion.config import settings
 from quaderno_companion.device.manager import device_manager
-from quaderno_companion.pipeline.optimizer import EinkOptimizer
 
 app = typer.Typer(
     name="quadctl",
@@ -449,6 +448,7 @@ def optimize(
         rprint(f"[bold red]Input file not found:[/bold red] {input_pdf}")
         sys.exit(1)
 
+    from quaderno_companion.pipeline.optimizer import EinkOptimizer
     optimizer = EinkOptimizer(profile_name=profile)
     out_bytes = optimizer.optimize_pdf(
         input_data=input_pdf,

@@ -10,9 +10,7 @@ Optimizes PDFs for Fujitsu Quaderno Gen 2 (A4/A5) displays:
 import io
 import logging
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
-import pymupdf as fitz
-from PIL import Image, ImageEnhance, ImageOps
+from typing import Any, List, Optional, Tuple, Union
 
 from quaderno_companion.config import SCREEN_PROFILES, ScreenProfile, settings
 
@@ -48,6 +46,10 @@ class EinkOptimizer:
         Returns:
             Optimized PDF as bytes.
         """
+        import pymupdf as fitz
+        if dither_raster:
+            from PIL import Image, ImageEnhance
+
         if isinstance(input_data, (str, Path)):
             doc = fitz.open(str(input_data))
         else:
@@ -236,6 +238,7 @@ class EinkOptimizer:
             return out_bytes, f"{title}.pdf"
 
         elif suffix in (".jpg", ".jpeg", ".png", ".webp"):
+            import pymupdf as fitz
             img_doc = fitz.open(str(path))
             pdf_bytes_tmp = img_doc.convert_to_pdf()
             img_doc.close()
@@ -273,8 +276,9 @@ class EinkOptimizer:
         else:
             raise ValueError(f"Unsupported file format for E-ink optimization: {suffix}")
 
-    def _detect_content_bbox(self, page: fitz.Page, margin_padding: float = 12.0) -> fitz.Rect:
+    def _detect_content_bbox(self, page: Any, margin_padding: float = 12.0) -> Any:
         """Find the bounding box of text, drawings, and images on a page."""
+        import pymupdf as fitz
         page_rect = page.rect
         bbox = fitz.Rect()
 

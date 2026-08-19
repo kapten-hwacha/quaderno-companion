@@ -4,12 +4,10 @@ import io
 import logging
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any, Optional, Tuple
-
-import pymupdf as fitz
-from PIL import Image
 
 try:
     import AppKit as _AppKit  # type: ignore[import-untyped]
@@ -21,14 +19,11 @@ except Exception:
     Quartz = None
 
 from quaderno_companion.config import settings
-from quaderno_companion.pipeline.optimizer import EinkOptimizer
-
-import sys
 
 logger = logging.getLogger(__name__)
 
 
-def crop_to_aspect_ratio(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
+def crop_to_aspect_ratio(img: Any, target_w: int, target_h: int) -> Any:
     """Center-crop image to match target aspect ratio (target_w / target_h) to fill the screen edge-to-edge."""
     target_ratio = target_w / target_h
     img_ratio = img.width / img.height
@@ -190,6 +185,8 @@ def capture_active_window_pdf(
         raise RuntimeError("Could not capture active window (screencapture/grim/maim/scrot/import not available or failed)")
 
     # Convert captured PNG into a high-contrast E-ink PDF
+    import pymupdf as fitz
+    from PIL import Image
     from quaderno_companion.config import SCREEN_PROFILES
     prof = SCREEN_PROFILES.get(target_profile, SCREEN_PROFILES["A4"])
     img = Image.open(tmp_png)
