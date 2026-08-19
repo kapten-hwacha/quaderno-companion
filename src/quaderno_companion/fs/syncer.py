@@ -69,6 +69,22 @@ def _compute_file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+def _download_remote_to_file(client: Any, doc_id: str, dest_path: Path) -> None:
+    """Download remote document to disk using streaming if available, with in-memory fallback."""
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    if hasattr(client, "download_document_to_file"):
+        try:
+            client.download_document_to_file(doc_id, dest_path)
+            if dest_path.exists() and dest_path.stat().st_size > 0:
+                return
+        except Exception:
+            pass
+    data = client.download_document(doc_id)
+    if isinstance(data, (bytes, bytearray)):
+        with open(dest_path, "wb") as f:
+            f.write(data)
+
+
 class QuadernoSyncer:
     """Bidirectional folder sync engine matching local directory to Quaderno storage."""
 
@@ -229,10 +245,7 @@ class QuadernoSyncer:
 
                 # Download new remote document
                 try:
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    data = client.download_document(doc_id)
-                    with open(local_path, "wb") as f:
-                        f.write(data)
+                    _download_remote_to_file(client, doc_id, local_path)
                     result.pulled.append(rel_path)
                     logger.info(f"Pulled document from Quaderno: {rel_path}")
                     
@@ -260,9 +273,7 @@ class QuadernoSyncer:
                 if remote_changed and not local_changed:
                     # Download remote update
                     try:
-                        data = client.download_document(doc_id)
-                        with open(local_path, "wb") as f:
-                            f.write(data)
+                        _download_remote_to_file(client, doc_id, local_path)
                         result.pulled.append(rel_path)
                         logger.info(f"Pulled updated document from Quaderno: {rel_path}")
                         state[rel_path] = {
@@ -305,9 +316,7 @@ class QuadernoSyncer:
                         conflict_rel = f"{stem} (Quaderno Conflict {ts}){ext}"
                         conflict_local = self.sync_dir / conflict_rel
                         
-                        data = client.download_document(doc_id)
-                        with open(conflict_local, "wb") as f:
-                            f.write(data)
+                        _download_remote_to_file(client, doc_id, conflict_local)
                         result.pulled.append(conflict_rel)
 
                         r_folder = _to_remote_folder(os.path.dirname(rel_path))

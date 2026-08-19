@@ -459,6 +459,15 @@ class QuadernoClient:
         """Download raw PDF document bytes asynchronously."""
         return await asyncio.to_thread(self.download_document, document_id_or_path)
 
+    async def download_document_to_file_async(
+        self,
+        document_id_or_path: str,
+        target_path: Union[str, Path],
+        chunk_size: int = 65536,
+    ) -> Path:
+        """Download document directly to disk file asynchronously with chunked streaming."""
+        return await asyncio.to_thread(self.download_document_to_file, document_id_or_path, target_path, chunk_size)
+
     async def get_battery_status(self) -> Dict[str, Any]:
         """Fetch battery level and charging state."""
         if not self._is_authenticated:
@@ -563,6 +572,35 @@ class QuadernoClient:
                 resp = dp._get_endpoint(f"/documents/{document_id_or_path}/file")
                 return resp.content
             return dp.download(document_id_or_path)
+
+        return self._run_sync_with_reauth(_do)
+
+    def download_document_to_file(
+        self,
+        document_id_or_path: str,
+        target_path: Union[str, Path],
+        chunk_size: int = 65536,
+    ) -> Path:
+        """Stream download directly to a file on disk to prevent storing large PDFs in RAM."""
+        out_file = Path(target_path).expanduser().resolve()
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        dp = self._ensure_dp_instance()
+
+        def _do():
+            doc_id = document_id_or_path
+            if not (len(doc_id) == 36 and "-" in doc_id):
+                doc_id = dp._get_object_id(doc_id)
+
+            url = dp._url(f"/documents/{doc_id}/file")
+            with dp.session.get(url, stream=True, timeout=60.0) as resp:
+                resp.raise_for_status()
+                tmp_target = out_file.with_suffix(f"{out_file.suffix}.tmp")
+                with open(tmp_target, "wb") as f:
+                    for chunk in resp.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            f.write(chunk)
+                tmp_target.replace(out_file)
+            return out_file
 
         return self._run_sync_with_reauth(_do)
 
