@@ -39,6 +39,8 @@ class NetworkRouter:
         self._cached_route: Optional[DeviceRoute] = None
         self._lock = asyncio.Lock()
         self._last_subnet_scan = 0.0
+        self._cached_gateways: List[str] = []
+        self._last_gateway_scan = 0.0
 
     async def get_active_route(self, force_refresh: bool = False) -> Optional[DeviceRoute]:
         """Discover and return the best available route to the device."""
@@ -130,11 +132,18 @@ class NetworkRouter:
         return None
 
     def invalidate_cache(self) -> None:
-        """Mark cached route as stale."""
+        """Mark cached route and gateway as stale."""
         self._cached_route = None
+        self._cached_gateways = []
+        self._last_gateway_scan = 0.0
 
     def _get_default_gateways(self) -> List[str]:
-        """Retrieve default gateway IPs from system routing table across Linux and macOS."""
+        """Retrieve default gateway IPs from system routing table across Linux and macOS (cached with 60s TTL)."""
+        import time
+        now = time.time()
+        if self._cached_gateways and (now - self._last_gateway_scan) < 60.0:
+            return list(self._cached_gateways)
+
         gateways: List[str] = []
         seen: Set[str] = set()
 
@@ -190,6 +199,10 @@ class NetworkRouter:
                     _add(parts[1])
         except Exception:
             pass
+
+        if gateways:
+            self._cached_gateways = list(gateways)
+            self._last_gateway_scan = now
 
         return gateways
 
