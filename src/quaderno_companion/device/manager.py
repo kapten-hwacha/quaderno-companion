@@ -136,6 +136,9 @@ class QuadernoDeviceManager:
         self._doc_toc_cache: dict = {}
         self._last_pushed_doc_id: Optional[str] = None
         self._last_pushed_time: float = 0.0
+        self._last_storage_fetch: float = 0.0
+        self._cached_storage_total_mb: Optional[float] = None
+        self._cached_storage_free_mb: Optional[float] = None
         self._load_persisted_state()
         self._load_persisted_toc_cache()
         # Re-entrant thread lock protects client resolution and route caching across all threads/event loops
@@ -357,14 +360,15 @@ class QuadernoDeviceManager:
             lookup_target = target_id or remote_path
             if lookup_target:
                 pdf_bytes = await client.download_document_async(lookup_target)
-                if pdf_bytes:
-                    toc = extract_pdf_toc(pdf_bytes)
-                    if toc:
-                        self._doc_toc_cache[target_id] = toc
-                        self._save_persisted_toc(target_id, toc)
-                        return toc
+                toc = extract_pdf_toc(pdf_bytes) if pdf_bytes else []
+                # Cache result even if empty so we don't repeatedly download on every tick
+                self._doc_toc_cache[target_id] = toc
+                self._save_persisted_toc(target_id, toc)
+                return toc
         except Exception as e:
             logger.debug(f"Could not fetch document TOC for {target_id}: {e}")
+            # Cache failure as empty to prevent infinite polling retry loops
+            self._doc_toc_cache[target_id] = []
 
         return []
 
@@ -493,18 +497,24 @@ class QuadernoDeviceManager:
                 status.is_connected = False
                 return status
 
-            # 2. Storage status (best effort)
-            try:
-                storage_res = await client.get_storage_status()
-                if isinstance(storage_res, dict):
-                    total_b = storage_res.get("total_space") or storage_res.get("capacity")
-                    free_b = storage_res.get("free_space") or storage_res.get("available")
-                    if total_b is not None:
-                        status.storage_total_mb = round(float(total_b) / (1024 * 1024), 1)
-                    if free_b is not None:
-                        status.storage_free_mb = round(float(free_b) / (1024 * 1024), 1)
-            except Exception as storage_err:
-                logger.debug(f"Storage status query failed (non-critical): {storage_err}")
+            # 2. Storage status (best effort, throttled to 60s intervals to save TLS roundtrips)
+            now = time.time()
+            if (now - getattr(self, "_last_storage_fetch", 0.0)) > 60.0 or self._cached_storage_free_mb is None:
+                try:
+                    storage_res = await client.get_storage_status()
+                    if isinstance(storage_res, dict):
+                        total_b = storage_res.get("total_space") or storage_res.get("capacity")
+                        free_b = storage_res.get("free_space") or storage_res.get("available")
+                        if total_b is not None:
+                            self._cached_storage_total_mb = round(float(total_b) / (1024 * 1024), 1)
+                        if free_b is not None:
+                            self._cached_storage_free_mb = round(float(free_b) / (1024 * 1024), 1)
+                        self._last_storage_fetch = now
+                except Exception as storage_err:
+                    logger.debug(f"Storage status query failed (non-critical): {storage_err}")
+
+            status.storage_total_mb = self._cached_storage_total_mb
+            status.storage_free_mb = self._cached_storage_free_mb
 
             # 3. Synchronize reading state live from Quaderno hardware (best effort)
             try:
