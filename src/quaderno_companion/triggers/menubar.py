@@ -700,7 +700,7 @@ class QuadernoMenubarApp(AppBase):
             finally:
                 self._sync_in_progress = False
 
-        bg_worker.submit(_sync_coro())
+        return bg_worker.submit(_sync_coro())
 
     def _dispatch_to_main(self, fn):
         """Safely execute a UI update callback on the AppKit main thread."""
@@ -837,7 +837,7 @@ class QuadernoMenubarApp(AppBase):
             finally:
                 self._telemetry_in_progress = False
 
-        bg_worker.submit(_fetch_coro())
+        return bg_worker.submit(_fetch_coro())
 
     def _execute_push_or_summarize(self, target: str, title: Optional[str] = None, page: int = 1):
         """Execute push or summarize based on summary_pages slider and summarizer_provider settings."""
@@ -870,7 +870,7 @@ class QuadernoMenubarApp(AppBase):
                 err_title = "Quaderno Summarize Error" if is_summary else "Quaderno Push Error"
                 show_alert(err_title, str(e))
 
-        bg_worker.submit(_worker_coro())
+        return bg_worker.submit(_worker_coro())
 
     def push_browser_tab(self, _):
         """Push or summarize the active web page currently open in Firefox, Safari, or Chrome."""
@@ -997,7 +997,7 @@ class QuadernoMenubarApp(AppBase):
                 show_alert("Navigation Error", str(e))
                 self.refresh_telemetry()
 
-        bg_worker.submit(_nav_coro())
+        return bg_worker.submit(_nav_coro())
 
     def _get_clipboard_text(self) -> str:
         """Get current text from system clipboard (pbpaste on macOS, wl-paste / xclip on Linux)."""

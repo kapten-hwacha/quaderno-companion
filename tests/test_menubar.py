@@ -89,10 +89,9 @@ def test_menubar_execute_push_or_summarize_routing():
          patch("quaderno_companion.triggers.menubar.notify") as mock_notify:
         mock_sum.return_value = {"status": "success", "message": "Pushed 3-page summary"}
 
-        app._execute_push_or_summarize(target="https://example.com/test", title="Test Page")
-        # Wait briefly for worker thread
-        import time
-        time.sleep(0.1)
+        fut = app._execute_push_or_summarize(target="https://example.com/test", title="Test Page")
+        if fut is not None:
+            fut.result(timeout=5.0)
 
         mock_sum.assert_called_once_with(
             text_or_url="https://example.com/test",
@@ -108,9 +107,9 @@ def test_menubar_execute_push_or_summarize_routing():
          patch("quaderno_companion.triggers.menubar.notify") as mock_notify:
         mock_sum.return_value = {"status": "success", "message": "Pushed 2-page summary"}
 
-        app._execute_push_or_summarize(target="https://example.com/test", title="Test Page")
-        import time
-        time.sleep(0.1)
+        fut = app._execute_push_or_summarize(target="https://example.com/test", title="Test Page")
+        if fut is not None:
+            fut.result(timeout=5.0)
 
         mock_sum.assert_called_once_with(
             text_or_url="https://example.com/test",
@@ -125,9 +124,9 @@ def test_menubar_execute_push_or_summarize_routing():
          patch("quaderno_companion.triggers.menubar.notify") as mock_notify:
         mock_push.return_value = {"status": "success", "message": "Pushed document"}
 
-        app._execute_push_or_summarize(target="https://example.com/test", title="Test Page", page=2)
-        import time
-        time.sleep(0.1)
+        fut = app._execute_push_or_summarize(target="https://example.com/test", title="Test Page", page=2)
+        if fut is not None:
+            fut.result(timeout=5.0)
 
         mock_push.assert_called_once_with(source_url_or_path="https://example.com/test", title="Test Page", page=2)
 
@@ -206,8 +205,9 @@ def test_menubar_chapters_menu_with_toc():
          patch("quaderno_companion.triggers.menubar.device_manager.get_status", new_callable=AsyncMock, return_value=status), \
          patch("quaderno_companion.triggers.menubar.device_manager.get_toc", new_callable=AsyncMock, return_value=mock_toc):
 
-        app.refresh_telemetry()
-        time.sleep(0.15)
+        fut = app.refresh_telemetry()
+        if fut is not None:
+            fut.result(timeout=5.0)
 
         # Check menu items in chapters_menu
         items = list(app.chapters_menu.values())
@@ -220,7 +220,6 @@ def test_menubar_chapters_menu_with_toc():
 
 def test_menubar_chapters_menu_landmark_fallback():
     """Verify refresh_telemetry falls back to landmarks when TOC is empty on multi-page doc."""
-    import time
     from quaderno_companion.device.manager import DeviceStatus, ReadingState
 
     with patch("rumps.Timer"):
@@ -241,8 +240,9 @@ def test_menubar_chapters_menu_landmark_fallback():
          patch("quaderno_companion.triggers.menubar.device_manager.get_status", new_callable=AsyncMock, return_value=status), \
          patch("quaderno_companion.triggers.menubar.device_manager.get_toc", new_callable=AsyncMock, return_value=[]):
 
-        app.refresh_telemetry()
-        time.sleep(0.15)
+        fut = app.refresh_telemetry()
+        if fut is not None:
+            fut.result(timeout=5.0)
 
         items = list(app.chapters_menu.values())
         item_titles = [it.title for it in items]
