@@ -165,9 +165,18 @@ def prompt_delete_previous_dialog(prev_title: str) -> bool:
     return False
 
 
+try:
+    import AppKit as _AppKit  # type: ignore[import-untyped]
+    AppKit = _AppKit
+except Exception:
+    AppKit = None
+
+
 # Setup C-level macOS ApplicationServices & CoreFoundation for sub-millisecond Accessibility extraction
 _app_services = None
 _core_foundation = None
+_CF_STR_CACHE = {}
+
 if sys.platform == "darwin":
     try:
         _as_path = ctypes.util.find_library("ApplicationServices")
@@ -187,6 +196,8 @@ if sys.platform == "darwin":
                 _core_foundation.CFGetTypeID.restype = ctypes.c_long
                 _core_foundation.CFGetTypeID.argtypes = [ctypes.c_void_p]
                 _core_foundation.CFStringGetTypeID.restype = ctypes.c_long
+                _core_foundation.CFRelease.restype = None
+                _core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
 
                 _app_services.AXUIElementCreateApplication.restype = ctypes.c_void_p
                 _app_services.AXUIElementCreateApplication.argtypes = [ctypes.c_int]
@@ -198,9 +209,21 @@ if sys.platform == "darwin":
 
 
 def _cf_str(s: str):
+    """Retrieve or create a cached static CFStringRef to avoid repeated heap allocation and leaks."""
     if not _core_foundation:
         return None
-    return _core_foundation.CFStringCreateWithCString(None, s.encode("utf-8"), 0x08000100)
+    if s not in _CF_STR_CACHE:
+        _CF_STR_CACHE[s] = _core_foundation.CFStringCreateWithCString(None, s.encode("utf-8"), 0x08000100)
+    return _CF_STR_CACHE[s]
+
+
+def _cf_release(ref):
+    """Safely decrement reference count on a CoreFoundation or Accessibility object."""
+    if ref and _core_foundation:
+        try:
+            _core_foundation.CFRelease(ref)
+        except Exception:
+            pass
 
 
 def _get_cf_str_value(cf_val) -> Optional[str]:
@@ -216,6 +239,24 @@ def _get_cf_str_value(cf_val) -> Optional[str]:
     return None
 
 
+def _get_preview_pid() -> Optional[int]:
+    """Get PID of running Preview application without forking a subprocess when AppKit is available."""
+    if AppKit:
+        try:
+            for app in AppKit.NSWorkspace.sharedWorkspace().runningApplications():
+                if app.bundleIdentifier() == "com.apple.Preview" or str(app.localizedName()) == "Preview":
+                    return int(app.processIdentifier())
+        except Exception:
+            pass
+    try:
+        pids = subprocess.check_output(["pgrep", "-x", "Preview"], text=True, stderr=subprocess.DEVNULL).strip().split("\n")
+        if pids and pids[0]:
+            return int(pids[0])
+    except Exception:
+        pass
+    return None
+
+
 def get_preview_current_page_native() -> int:
     """Read the active page number from Apple Preview via macOS Accessibility C API."""
     if _app_services is None or _core_foundation is None:
@@ -223,47 +264,59 @@ def get_preview_current_page_native() -> int:
     app_srv = _app_services
     cf = _core_foundation
     try:
-        pids = subprocess.check_output(["pgrep", "-x", "Preview"], text=True).strip().split("\n")
-        if not pids or not pids[0]:
+        pid = _get_preview_pid()
+        if not pid:
             return 1
-        pid = int(pids[0])
         app_elem = app_srv.AXUIElementCreateApplication(pid)
         if not app_elem:
             return 1
 
-        win_ref = ctypes.c_void_p()
-        err = app_srv.AXUIElementCopyAttributeValue(app_elem, _cf_str("AXMainWindow"), ctypes.byref(win_ref))
-        if err != 0 or not win_ref.value:
-            err = app_srv.AXUIElementCopyAttributeValue(app_elem, _cf_str("AXFocusedWindow"), ctypes.byref(win_ref))
-        if err != 0 or not win_ref.value:
-            return 1
+        try:
+            win_ref = ctypes.c_void_p()
+            err = app_srv.AXUIElementCopyAttributeValue(app_elem, _cf_str("AXMainWindow"), ctypes.byref(win_ref))
+            if err != 0 or not win_ref.value:
+                err = app_srv.AXUIElementCopyAttributeValue(app_elem, _cf_str("AXFocusedWindow"), ctypes.byref(win_ref))
+            if err != 0 or not win_ref.value:
+                return 1
 
-        main_win = win_ref.value
+            main_win = win_ref.value
 
-        def find_page_in_elem(elem, depth=0):
-            if depth > 6 or not elem:
+            def find_page_in_elem(elem, depth=0):
+                if depth > 6 or not elem:
+                    return None
+                val_ref = ctypes.c_void_p()
+                app_srv.AXUIElementCopyAttributeValue(elem, _cf_str("AXValue"), ctypes.byref(val_ref))
+                if val_ref.value:
+                    try:
+                        val = _get_cf_str_value(val_ref.value)
+                        if val:
+                            m = re.search(r"Page\s+(\d+)\s+of", val, re.IGNORECASE)
+                            if m:
+                                return int(m.group(1))
+                    finally:
+                        _cf_release(val_ref.value)
+
+                children_ref = ctypes.c_void_p()
+                err = app_srv.AXUIElementCopyAttributeValue(elem, _cf_str("AXChildren"), ctypes.byref(children_ref))
+                if err == 0 and children_ref.value:
+                    try:
+                        cnt = cf.CFArrayGetCount(children_ref.value)
+                        for i in range(cnt):
+                            child = cf.CFArrayGetValueAtIndex(children_ref.value, i)
+                            res = find_page_in_elem(child, depth + 1)
+                            if res:
+                                return res
+                    finally:
+                        _cf_release(children_ref.value)
                 return None
-            val_ref = ctypes.c_void_p()
-            app_srv.AXUIElementCopyAttributeValue(elem, _cf_str("AXValue"), ctypes.byref(val_ref))
-            val = _get_cf_str_value(val_ref.value)
-            if val:
-                m = re.search(r"Page\s+(\d+)\s+of", val, re.IGNORECASE)
-                if m:
-                    return int(m.group(1))
 
-            children_ref = ctypes.c_void_p()
-            err = app_srv.AXUIElementCopyAttributeValue(elem, _cf_str("AXChildren"), ctypes.byref(children_ref))
-            if err == 0 and children_ref.value:
-                cnt = cf.CFArrayGetCount(children_ref.value)
-                for i in range(cnt):
-                    child = cf.CFArrayGetValueAtIndex(children_ref.value, i)
-                    res = find_page_in_elem(child, depth + 1)
-                    if res:
-                        return res
-            return None
-
-        p = find_page_in_elem(main_win)
-        return p if p else 1
+            try:
+                p = find_page_in_elem(main_win)
+                return p if p else 1
+            finally:
+                _cf_release(main_win)
+        finally:
+            _cf_release(app_elem)
     except Exception:
         return 1
 
@@ -274,6 +327,10 @@ def get_preview_document_info() -> Tuple[Optional[str], int]:
     Returns:
         (file_path, page_number) where page_number defaults to 1 if undetected.
     """
+    pid = _get_preview_pid()
+    if not pid:
+        return None, 1
+
     doc_path = None
     script = '''
     tell application "Preview"
