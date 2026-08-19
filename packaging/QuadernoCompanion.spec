@@ -114,6 +114,18 @@ coll = COLLECT(
 )
 
 if sys.platform == "darwin":
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib  # type: ignore
+
+    _version = "0.1.2"
+    try:
+        with open(PROJECT_ROOT / "pyproject.toml", "rb") as _f:
+            _version = tomllib.load(_f).get("project", {}).get("version", "0.1.2")
+    except Exception:
+        pass
+
     app = BUNDLE(
         coll,
         name="Quaderno Companion.app",
@@ -123,8 +135,8 @@ if sys.platform == "darwin":
             "CFBundleName": "Quaderno Companion",
             "CFBundleDisplayName": "Quaderno Companion",
             "CFBundleIdentifier": "com.quaderno.companion",
-            "CFBundleVersion": "0.1.0",
-            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleVersion": _version,
+            "CFBundleShortVersionString": _version,
             "CFBundlePackageType": "APPL",
             "CFBundleExecutable": "quaderno-companion",
             "CFBundleIconFile": "QuadernoCompanion.icns",

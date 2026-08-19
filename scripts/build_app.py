@@ -38,7 +38,9 @@ def run_pyinstaller():
     """Run PyInstaller with the spec file."""
     spec_path = PACKAGING_DIR / "QuadernoCompanion.spec"
     cmd = [
-        "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         str(spec_path),
         "--clean",
         "-y",
