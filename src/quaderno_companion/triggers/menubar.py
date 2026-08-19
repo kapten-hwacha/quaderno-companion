@@ -114,6 +114,49 @@ MenuItemBase: Any = rumps.MenuItem
 AppBase: Any = rumps.App
 
 
+class BackgroundAsyncWorker:
+    """Persistent background thread managing a single shared asyncio event loop."""
+
+    def __init__(self):
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._thread: Optional[threading.Thread] = None
+        self._lock = threading.Lock()
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            ready = threading.Event()
+
+            def _run():
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+                ready.set()
+                self._loop.run_forever()
+
+            self._thread = threading.Thread(target=_run, daemon=True, name="MenubarAsyncWorker")
+            self._thread.start()
+            ready.wait()
+
+    def stop(self) -> None:
+        with self._lock:
+            if self._loop and self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._thread:
+                self._thread.join(timeout=1.0)
+            self._loop = None
+            self._thread = None
+
+    def submit(self, coro):
+        """Submit a coroutine to the background event loop."""
+        if not self._loop or not self._loop.is_running():
+            self.start()
+        return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+
+bg_worker = BackgroundAsyncWorker()
+
+
 class ToggleMenuItem(MenuItemBase):
     """MenuItem that retains custom switch state without triggering macOS checkmark gutter shifts."""
     def __init__(self, *args, **kwargs):
@@ -608,6 +651,10 @@ class QuadernoMenubarApp(AppBase):
             sync_runner.stop()
         except Exception:
             pass
+        try:
+            bg_worker.stop()
+        except Exception:
+            pass
         rumps.quit_application()
 
     def toggle_watch_mode(self, sender=None):
@@ -633,22 +680,19 @@ class QuadernoMenubarApp(AppBase):
         if self._sync_in_progress:
             return
 
-        def _sync_worker():
+        async def _sync_coro():
             self._sync_in_progress = True
             try:
                 doc_path, page_num = get_preview_document_info()
                 if doc_path and (doc_path != self._last_synced_doc or page_num != self._last_synced_page):
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
                     if doc_path != self._last_synced_doc:
-                        loop.run_until_complete(tool_push_document(
+                        await tool_push_document(
                             source_url_or_path=doc_path,
                             title=Path(doc_path).stem,
                             page=page_num,
-                        ))
+                        )
                     elif page_num != self._last_synced_page:
-                        loop.run_until_complete(tool_navigate_reader(action="goto", page=page_num))
-                    loop.close()
+                        await tool_navigate_reader(action="goto", page=page_num)
                     self._last_synced_doc = doc_path
                     self._last_synced_page = page_num
             except Exception as e:
@@ -656,7 +700,7 @@ class QuadernoMenubarApp(AppBase):
             finally:
                 self._sync_in_progress = False
 
-        threading.Thread(target=_sync_worker, daemon=True).start()
+        bg_worker.submit(_sync_coro())
 
     def _dispatch_to_main(self, fn):
         """Safely execute a UI update callback on the AppKit main thread."""
@@ -682,21 +726,18 @@ class QuadernoMenubarApp(AppBase):
         if getattr(self, "_telemetry_in_progress", False):
             return
 
-        def _fetch():
+        async def _fetch_coro():
             self._telemetry_in_progress = True
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                status = loop.run_until_complete(device_manager.get_status())
+                status = await device_manager.get_status()
                 toc = []
                 if status.is_connected and status.reading_state and status.reading_state.document_id:
                     doc_id = status.reading_state.document_id
                     try:
-                        toc = loop.run_until_complete(device_manager.get_toc(doc_id))
+                        toc = await device_manager.get_toc(doc_id)
                     except Exception as toc_err:
                         logger.debug(f"Could not load TOC during telemetry refresh: {toc_err}")
                         toc = getattr(device_manager, "_doc_toc_cache", {}).get(doc_id, [])
-                loop.close()
 
                 def _apply_ui():
                     if status.is_connected:
@@ -796,7 +837,7 @@ class QuadernoMenubarApp(AppBase):
             finally:
                 self._telemetry_in_progress = False
 
-        threading.Thread(target=_fetch, daemon=True).start()
+        bg_worker.submit(_fetch_coro())
 
     def _execute_push_or_summarize(self, target: str, title: Optional[str] = None, page: int = 1):
         """Execute push or summarize based on summary_pages slider and summarizer_provider settings."""
@@ -807,24 +848,21 @@ class QuadernoMenubarApp(AppBase):
         action_verb = f"Summarizing ({pages} pg{'s' if pages > 1 else ''} via {prov_label})..." if is_summary else "Ingesting..."
         success_title = "Summary Pushed" if is_summary else "Pushed to Device"
 
-        def _worker():
+        async def _worker_coro():
             try:
                 display_name = title or (Path(target).name if Path(target).exists() else target[:40])
                 page_suffix = f" (Page {page})" if page > 1 and not is_summary else ""
                 notify("Quaderno Companion", action_verb, f"Processing {display_name}{page_suffix}...")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
                 if is_summary:
-                    res = loop.run_until_complete(agent.summarize_and_push(
+                    res = await agent.summarize_and_push(
                         text_or_url=target,
                         title=title,
                         pages=pages,
                         provider=provider,
-                    ))
+                    )
                 else:
-                    res = loop.run_until_complete(tool_push_document(source_url_or_path=target, title=title, page=page))
+                    res = await tool_push_document(source_url_or_path=target, title=title, page=page)
 
-                loop.close()
                 notify("Quaderno Companion", success_title, res.get("message", "Sent to device."))
                 self.refresh_telemetry()
             except Exception as e:
@@ -832,7 +870,7 @@ class QuadernoMenubarApp(AppBase):
                 err_title = "Quaderno Summarize Error" if is_summary else "Quaderno Push Error"
                 show_alert(err_title, str(e))
 
-        threading.Thread(target=_worker, daemon=True).start()
+        bg_worker.submit(_worker_coro())
 
     def push_browser_tab(self, _):
         """Push or summarize the active web page currently open in Firefox, Safari, or Chrome."""
@@ -951,17 +989,15 @@ class QuadernoMenubarApp(AppBase):
 
         self._dispatch_to_main(_apply_optimistic)
 
-        def _nav():
+        async def _nav_coro():
             try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(tool_navigate_reader(action="goto", page=target_page))
-                loop.close()
+                await tool_navigate_reader(action="goto", page=target_page)
                 self.refresh_telemetry()
             except Exception as e:
                 show_alert("Navigation Error", str(e))
                 self.refresh_telemetry()
-        threading.Thread(target=_nav, daemon=True).start()
+
+        bg_worker.submit(_nav_coro())
 
     def _get_clipboard_text(self) -> str:
         """Get current text from system clipboard (pbpaste on macOS, wl-paste / xclip on Linux)."""
