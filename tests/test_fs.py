@@ -178,3 +178,19 @@ def test_syncer_get_known_folders(tmp_path, mock_quaderno_client):
     assert "Document/Notes" in folders
     assert "Document/Research" in folders
 
+
+def test_resolve_destination_folder_default_to_document():
+    """Verify _resolve_destination_folder defaults to Document (Quaderno root)."""
+    from quaderno_companion.cli import _resolve_destination_folder
+
+    # Non-interactive session defaults to Document
+    with patch("sys.stdin.isatty", return_value=False):
+        dest = _resolve_destination_folder(explicit_dest=None)
+        assert dest == "Document"
+
+    # Interactive session with choice '1' (default item) selects Document
+    with patch("sys.stdin.isatty", return_value=True), \
+         patch("rich.prompt.Prompt.ask", return_value="1"):
+        dest = _resolve_destination_folder(explicit_dest=None)
+        assert dest == "Document"
+

@@ -79,6 +79,7 @@ def test_menubar_summarizer_provider_property():
 
 def test_menubar_execute_push_or_summarize_routing():
     """Verify _execute_push_or_summarize calls agent.summarize_and_push with active provider."""
+    from quaderno_companion.config import settings
     with patch("rumps.Timer"):
         app = QuadernoMenubarApp()
 
@@ -128,6 +129,12 @@ def test_menubar_execute_push_or_summarize_routing():
         fut = app._execute_push_or_summarize(target="https://example.com/test", title="Test Page", page=2)
         if fut is not None:
             fut.result(timeout=5.0)
+
+        mock_prompt.assert_called_once_with(
+            title="Select Destination Folder on Quaderno",
+            initial_folder="Document",
+            root_mirror=settings.sync_dir,
+        )
 
         mock_push.assert_called_once_with(
             source_url_or_path="https://example.com/test",

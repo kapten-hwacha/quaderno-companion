@@ -854,7 +854,7 @@ class QuadernoMenubarApp(AppBase):
         target_dest = destination_folder
         if not is_summary and target_dest is None:
             # Prompt user with native macOS Folder Browser dialog rooted at mirror
-            last_used = getattr(self, "_last_dest_folder", None) or settings.remote_companion_folder
+            last_used = getattr(self, "_last_dest_folder", None) or "Document"
             resp = prompt_folder_dialog(
                 title="Select Destination Folder on Quaderno",
                 initial_folder=last_used,

@@ -195,7 +195,7 @@ def _resolve_destination_folder(
             return f"Document/{fldr}"
         return fldr
 
-    default = (default_folder or settings.remote_companion_folder).replace("\\", "/").strip("/")
+    default = (default_folder or "Document").replace("\\", "/").strip("/")
     if not default.lower().startswith("document"):
         default = f"Document/{default}" if default else "Document"
 
@@ -205,10 +205,11 @@ def _resolve_destination_folder(
 
     # Gather available folders
     known = syncer.get_known_folders()
+    if "Document" in known:
+        known.remove("Document")
+    known.insert(0, "Document")
     if default not in known:
         known.insert(0, default)
-    if "Document" not in known:
-        known.insert(0, "Document")
 
     rprint("\n[bold cyan]Destination Location on Quaderno:[/bold cyan]")
     for idx, folder in enumerate(known, 1):
