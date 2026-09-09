@@ -30,7 +30,6 @@ from quaderno_companion.agent.tools import (
     tool_get_reading_state,
     tool_navigate_reader,
     tool_push_document,
-    tool_summarize_to_eink,
 )
 from quaderno_companion.config import settings
 from quaderno_companion.device.manager import device_manager
@@ -168,13 +167,7 @@ class PageNavigationRequest(BaseModel):
 class AgentPushRequest(BaseModel):
     url: str = Field(..., description="Web page URL or PDF link to push.")
     title: Optional[str] = Field(None, description="Page title.")
-    summarize: bool = Field(False, description="Whether to summarize before pushing.")
-    pages: Optional[int] = Field(None, description="Target summary length in pages (1–5).")
-    notebook_url: Optional[str] = Field(None, description="Gemini Notebook URL.")
-    notebook_id: Optional[str] = Field(None, description="Gemini Notebook ID from library.")
-    provider: Optional[str] = Field(None, description="Summarizer provider ('gemini_notebook', 'gemini_api', 'rule_based', 'auto').")
-    notebook_mode: Optional[str] = Field(None, description="Notebook mode ('ephemeral' fresh notebook, 'shared' existing).")
-    cleanup: Optional[bool] = Field(None, description="Whether to auto-delete ephemeral notebook after summary.")
+    destination_folder: Optional[str] = Field(None, description="Target destination folder on Quaderno.")
 
 
 class AgentChatRequest(BaseModel):
@@ -377,22 +370,13 @@ async def navigate_page(nav: PageNavigationRequest):
     dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
 )
 async def agent_push(req: AgentPushRequest):
-    """Trigger endpoint for programmatic URL push and summarization."""
+    """Trigger endpoint for programmatic URL or document push."""
     try:
-        if req.summarize or (req.pages is not None and req.pages > 0):
-            target_pages = req.pages or 1
-            return await agent.summarize_and_push(
-                req.url,
-                title=req.title,
-                pages=target_pages,
-                notebook_url=req.notebook_url,
-                notebook_id=req.notebook_id,
-                provider=req.provider,
-                notebook_mode=req.notebook_mode,
-                cleanup=req.cleanup,
-            )
-        else:
-            return await tool_push_document(source_url_or_path=req.url, title=req.title)
+        return await tool_push_document(
+            source_url_or_path=req.url,
+            title=req.title,
+            destination_folder=req.destination_folder,
+        )
     except HTTPException:
         raise
     except ValueError as ve:

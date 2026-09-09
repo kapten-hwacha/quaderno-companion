@@ -221,33 +221,26 @@ def test_sync_endpoints():
     assert "sync_dir" in res_status.json()
 
 
-def test_agent_push_summarize_with_pages():
-    """Verify /api/agent/push endpoint forwards pages and notebook parameters to summarize_and_push."""
-    with patch("quaderno_companion.server.agent.summarize_and_push", new_callable=AsyncMock) as mock_sum:
-        mock_sum.return_value = {"status": "success", "message": "Summary Pushed"}
+def test_agent_push_direct():
+    """Verify /api/agent/push endpoint calls tool_push_document directly."""
+    with patch("quaderno_companion.server.tool_push_document", new_callable=AsyncMock) as mock_push:
+        mock_push.return_value = {"status": "success", "message": "Document Pushed"}
 
         res = client.post(
             "/api/agent/push",
             json={
                 "url": "https://example.com/article",
                 "title": "Article Title",
-                "summarize": True,
-                "pages": 2,
-                "notebook_url": "https://notebooklm.google.com/notebook/xyz",
-                "provider": "gemini_notebook",
+                "destination_folder": "Document/Research",
             },
         )
         assert res.status_code == 200
-        mock_sum.assert_called_once_with(
-            "https://example.com/article",
+        mock_push.assert_called_once_with(
+            source_url_or_path="https://example.com/article",
             title="Article Title",
-            pages=2,
-            notebook_url="https://notebooklm.google.com/notebook/xyz",
-            notebook_id=None,
-            provider="gemini_notebook",
-            notebook_mode=None,
-            cleanup=None,
+            destination_folder="Document/Research",
         )
+
 
 
 def test_open_document_epub_upload():

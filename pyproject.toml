@@ -27,7 +27,6 @@ dependencies = [
     "rumps>=0.4.0; sys_platform == 'darwin'",
     "lz4>=4.3.0",
     "pyobjc-framework-quartz>=12.2.2; sys_platform == 'darwin'",
-    "notebooklm-py[browser]>=0.8.1",
 ]
 
 [project.scripts]

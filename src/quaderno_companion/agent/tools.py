@@ -1,16 +1,14 @@
-"""Standardized Tool Definitions for Quaderno Agent.
+"""Standardized Tool Definitions for Quaderno Companion.
 
-Exposes atomic, E-ink specific operations for LLM function calling and intent dispatch:
+Exposes atomic, E-ink specific operations for intent dispatch:
 1. push_document: Ingests, optimizes, uploads, and displays a document.
 2. navigate_reader: Navigates reading pages on active document.
-3. summarize_to_eink: Synthesizes text/URL into structured 1-page E-ink brief and pushes to display.
-4. get_reading_state: Queries active document title, ID, and page position.
+3. get_reading_state: Queries active document title, ID, and page position.
 """
 
 import json
 import logging
 import re
-import time
 from typing import Any, Dict, List, Optional, TypedDict, Union
 
 from pydantic import BaseModel, Field
@@ -23,8 +21,6 @@ from quaderno_companion.device.manager import (
     device_manager,
 )
 from quaderno_companion.pipeline.fetcher import ContentFetcher
-from quaderno_companion.pipeline.optimizer import EinkOptimizer
-from quaderno_companion.pipeline.templates import EinkDocumentBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +41,8 @@ class NavigateToolResult(TypedDict):
     details: NavigateResult
 
 
-class SummarizeToolResult(TypedDict):
-    """Return shape for tool_summarize_to_eink."""
-    status: str
-    message: str
-    details: OpenDocumentResult
-
-
 # General union alias for tool envelope
-ToolResult = Union[PushDocumentResult, NavigateToolResult, SummarizeToolResult]
+ToolResult = Union[PushDocumentResult, NavigateToolResult]
 
 
 class ReadingStateResult(TypedDict):
@@ -100,29 +89,6 @@ class NavigateReaderParams(BaseModel):
     page: Optional[int] = Field(
         default=None,
         description="Target page number (for 'goto') or delta (for 'offset').",
-    )
-
-
-class SummarizeToEinkParams(BaseModel):
-    text_or_url: str = Field(
-        ...,
-        description="Text content, web URL, or local file path to summarize.",
-    )
-    title: Optional[str] = Field(
-        default=None,
-        description="Document title for the generated summary brief.",
-    )
-    key_takeaways: Optional[List[str]] = Field(
-        default=None,
-        description="Optional list of executive takeaway bullet points.",
-    )
-    sections: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Structured sections for multi-topic synthesis.",
-    )
-    pages: int = Field(
-        default=1,
-        description="Target page length of the summary (1–5 pages).",
     )
 
 
@@ -201,61 +167,6 @@ async def tool_get_reading_state() -> ReadingStateResult:
     }
 
 
-async def tool_summarize_to_eink(
-    text_or_url: str,
-    title: Optional[str] = None,
-    key_takeaways: Optional[List[str]] = None,
-    sections: Optional[Dict[str, Any]] = None,
-    pages: int = 1,
-) -> SummarizeToolResult:
-    """Generates a structured E-ink summary PDF and pushes it to the display."""
-    doc_title = title or "Executive Brief"
-    builder = EinkDocumentBuilder(profile_name=settings.default_profile)
-
-    # If takeaways and sections are not provided, synthesize default structure
-    takeaways = key_takeaways or [
-        "Key insight extracted from source document.",
-        "Synthesized for high-contrast E-ink reading ergonomics.",
-    ]
-    sec = sections or {
-        "Overview": text_or_url if len(text_or_url) < 1500 else text_or_url[:1500] + "..."
-    }
-
-    pdf_bytes = builder.render_summary_pdf(
-        title=doc_title,
-        source_url=text_or_url if text_or_url.startswith("http") else None,
-        key_takeaways=takeaways,
-        sections=sec,
-    )
-
-    optimizer = EinkOptimizer(profile_name=settings.default_profile)
-    optimized_pdf = optimizer.optimize_pdf(pdf_bytes, trim_margins=False)
-
-    page_label = f"_{pages}p" if pages > 1 else ""
-    clean_title = re.sub(r'[\\/*?:"<>|\s]+', "_", doc_title[:30]).strip("_")
-    filename = f"Summary_{int(time.time())}{page_label}_{clean_title or 'Doc'}.pdf"
-    result = await device_manager.open_document(
-        pdf_bytes=optimized_pdf,
-        filename=filename,
-        title=f"Summary: {doc_title}",
-        page=1,
-    )
-
-    from quaderno_companion.state import record_pushed_document
-    if result.get("document_id"):
-        record_pushed_document(
-            doc_id=result["document_id"],
-            title=f"Summary: {doc_title}",
-            path=text_or_url,
-        )
-
-    return {
-        "status": "success",
-        "message": f"Summary '{doc_title}' pushed to Quaderno display.",
-        "details": result,
-    }
-
-
 # ---------------- Tool Registry & Schema ----------------
 
 TOOL_DEFINITIONS = [
@@ -272,12 +183,6 @@ TOOL_DEFINITIONS = [
         "handler": tool_navigate_reader,
     },
     {
-        "name": "summarize_to_eink",
-        "description": "Generates a structured 1-page summary, compiles it to PDF, and pushes it to the display.",
-        "parameters": SummarizeToEinkParams.model_json_schema(),
-        "handler": tool_summarize_to_eink,
-    },
-    {
         "name": "get_reading_state",
         "description": "Queries active document metadata, page position, and device status.",
         "parameters": {"type": "object", "properties": {}},
@@ -288,6 +193,5 @@ TOOL_DEFINITIONS = [
 TOOL_MAP: Dict[str, Any] = {
     "push_document": tool_push_document,
     "navigate_reader": tool_navigate_reader,
-    "summarize_to_eink": tool_summarize_to_eink,
     "get_reading_state": tool_get_reading_state,
 }

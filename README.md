@@ -47,9 +47,8 @@ The agent ingests web pages, academic papers, and reading materials, optimizes t
 - **Intelligent Margin Trimming**: Detects content bounding box and trims excess academic paper margins for maximum text readability.
 - **Ultra-Fast Wireless Push**: Deflates and compresses PDF streams down to <300 KB for near-instant wireless transfer.
 - **Network Auto-Routing**: Automatically discovers and fails over across local Wi-Fi (`digitalpaper.local` or static IP), Quaderno Wi-Fi Access Point / SoftAP (`192.168.43.1` / dynamic gateway), and USB tethering (`172.25.47.1`).
-- **Autonomous Agent & Dual-Engine Summarizer**: Synthesizes structured 1–5 page executive briefs from text/URLs directly into high-contrast E-ink layouts via either **⚡ Gemini API** (instant ~2s briefs) or **📚 Google Gemini Notebook** (NotebookLM direct RPC with source-grounded citations).
-- **Google Gemini Notebook Integration**: Automates source ingestion, grounding synthesis, and summary extraction using ephemeral or shared Gemini Notebooks via direct async RPCs.
 - **1-Click Triggers**: Native menu bar companion, hotkeys, and Raycast script commands for desktop workflows.
+- **Zero Cloud, 100% Local**: No external API keys or cloud accounts required. Direct point-to-point bridge between your computer and Quaderno.
 
 ---
 
@@ -133,10 +132,6 @@ uv run quadctl install-service
 | `uv run quadctl window` | Captures the currently active macOS window and pushes it to Quaderno |
 | `uv run quadctl preview` | Pushes/mirrors the document active in Apple Preview |
 | `uv run quadctl preview --watch` | Continuous real-time page mirror with Apple Preview |
-| `uv run quadctl summarize <url_or_text>` | Generates a 1–5 page E-ink brief via Gemini Notebook / API and pushes to display |
-| `uv run quadctl notebook login` | Logs in to Google Gemini Notebook (NotebookLM) via browser session |
-| `uv run quadctl notebook status` | Checks Gemini Notebook authentication and library status |
-| `uv run quadctl notebook list` | Lists notebooks in your Google Gemini Notebook library |
 | `uv run quadctl install-service` | Installs background auto-start daemon (macOS LaunchAgent) |
 | `uv run quadctl uninstall-service` | Removes background macOS LaunchAgent |
 | `uv run quadctl serve` | Starts the FastAPI daemon |
@@ -201,52 +196,12 @@ uv run quadctl app
 - **Single-Row Page Navigation**: `[ ◀ Prev ] [ 🔢 Go to ] [ Next ▶ ]` directly in the top subdivision.
 - **🔄 Sync Now**: 1-click trigger to run an immediate background sync pass.
 - **📁 Open Quaderno Folder**: 1-click reveal of `~/Quaderno` in Finder.
+- **📁 Push Local File...**: Native file picker to ingest PDFs, EPUBs, MOBIs, or markdown notes.
 - **🌐 Push Active Browser Tab**: 1-click grab and send your active tab from Firefox, Safari, or Chrome.
 - **🖥️ Push Active Window**: 1-click capture and send the frontmost application window.
 - **🪞 Preview Mirror**: Checkbox toggle to automatically mirror pages in real-time as you scroll/navigate in Apple Preview.
-- **📝 Summarize Length**: Interactive page slider (Off, 1–5 pages) for custom briefing depth.
-- **⚙️ Engine Switch**: Native segmented control to toggle between `⚡ Gemini API` (instant) and `📚 NotebookLM` (source-grounded synthesis).
 - **👁️ Push from Preview**: Instantly detects and sends your open document in Preview.
 - **📋 Push from Clipboard**: Instantly pushes whatever URL or text you copied (`Cmd+C`).
-
-To have it automatically run in the background every time your Mac logs in:
-```bash
-uv run quadctl install-service
-```
-
----
-
-### 5. 🧠 Dual-Engine Summarizer & E-Ink Briefs
-
-Quaderno Companion offers two summarization engines tailored for different workflows:
-
-- **⚡ Gemini API (`gemini_api`)**: Ultra-fast (~1.5–2s) structured JSON synthesis via Google Developer API. Perfect for real-time background active-tab pushes and instant reading briefs.
-- **📚 Gemini Notebook (`gemini_notebook` / NotebookLM RPC)**: Deep synthesis with strict numeric source citations (`[1]`, `[2]`) grounded directly in source documents via direct asynchronous RPCs. Perfect for research papers, long-form articles, and multi-document synthesis.
-
-#### Usage & Commands:
-
-```bash
-# 1. Direct Gemini API summary (Fast ~2s, requires GEMINI_API_KEY):
-uv run quadctl summarize https://arxiv.org/abs/2312.00752 --pages 2 --provider gemini_api
-
-# 2. Gemini Notebook / NotebookLM summary (Deep Grounding with citations):
-# Authenticate once with Google:
-uv run quadctl notebook login
-uv run quadctl notebook status
-
-# Ephemeral Mode (creates temporary notebook, ingests source, extracts brief, auto-cleans up):
-uv run quadctl summarize https://arxiv.org/abs/2312.00752 --pages 2 --provider gemini_notebook
-
-# Shared Mode (queries an existing research notebook by URL or ID):
-uv run quadctl summarize "What are the core architecture milestones?" --notebook-url "https://notebooklm.google.com/notebook/..." --pages 3
-```
-
-#### Menu Bar GUI Toggle:
-In the macOS Menu Bar app, use the inline segmented control directly beneath the `📝 Summary:` slider to toggle between engines in real-time with zero configuration needed:
-```text
-📝 Summary: [ Slider: 2 pgs ]
-[ ⚡ Gemini API | 📚 NotebookLM ]
-```
 
 ### 6. ⚡ Raycast Script Commands
 Symlink or copy the scripts in `triggers/raycast/` to your Raycast scripts directory:

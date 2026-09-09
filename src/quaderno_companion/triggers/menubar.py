@@ -332,99 +332,6 @@ class QuadernoMenubarApp(AppBase):
             self.page_slider_item = rumps.MenuItem("")
             self.page_slider_item._menuitem.setView_(slider_container)
 
-            # Native NSSlider for Summary Length (Snaps to 0=Off, 1..5 pages)
-            class _SummarySliderHandler(AppKit.NSObject):
-                def initWithApp_(self, app_inst):
-                    self = objc.super(_SummarySliderHandler, self).init()
-                    if self is not None:
-                        self.app = app_inst
-                    return self
-
-                def handleSlider_(self, sender):
-                    val = int(round(sender.doubleValue()))
-                    if val < 0:
-                        val = 0
-                    elif val > 5:
-                        val = 5
-                    self.app._summary_pages = val
-                    self.app._update_summary_ui(val)
-
-            self._summary_handler = _SummarySliderHandler.alloc().initWithApp_(self)
-
-            # Left Label: "📝 Summary:"
-            self.summary_label = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(16, 4, 86, 18))
-            self.summary_label.setStringValue_("📝 Summary:")
-            self.summary_label.setBezeled_(False)
-            self.summary_label.setDrawsBackground_(False)
-            self.summary_label.setEditable_(False)
-            self.summary_label.setSelectable_(False)
-            self.summary_label.setFont_(AppKit.NSFont.systemFontOfSize_(12.0))
-            self.summary_label.setTextColor_(AppKit.NSColor.labelColor())
-            self.summary_label.setAlignment_(AppKit.NSTextAlignmentLeft)
-            self.summary_label.cell().setLineBreakMode_(AppKit.NSLineBreakByClipping)
-
-            # Center Slider: range 0 to 5, 6 tick marks, integer snapping
-            self.summary_slider = AppKit.NSSlider.alloc().initWithFrame_(AppKit.NSMakeRect(104, 3, 74, 20))
-            self.summary_slider.setMinValue_(0.0)
-            self.summary_slider.setMaxValue_(5.0)
-            self.summary_slider.setDoubleValue_(0.0)
-            self.summary_slider.setContinuous_(True)
-            self.summary_slider.setAllowsTickMarkValuesOnly_(True)
-            self.summary_slider.setNumberOfTickMarks_(6)
-            self.summary_slider.setTickMarkPosition_(AppKit.NSTickMarkPositionBelow)
-            self.summary_slider.setTarget_(self._summary_handler)
-            self.summary_slider.setAction_(objc.selector(self._summary_handler.handleSlider_, signature=b"v@:@"))
-
-            # Right live badge: "Off", "1 pg", "2 pgs", etc.
-            self.summary_badge = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(180, 4, 48, 18))
-            self.summary_badge.setStringValue_("Off")
-            self.summary_badge.setBezeled_(False)
-            self.summary_badge.setDrawsBackground_(False)
-            self.summary_badge.setEditable_(False)
-            self.summary_badge.setSelectable_(False)
-            self.summary_badge.setFont_(AppKit.NSFont.monospacedDigitSystemFontOfSize_weight_(11.0, AppKit.NSFontWeightMedium))
-            self.summary_badge.setTextColor_(AppKit.NSColor.secondaryLabelColor())
-            self.summary_badge.setAlignment_(AppKit.NSTextAlignmentRight)
-            self.summary_badge.cell().setLineBreakMode_(AppKit.NSLineBreakByClipping)
-
-            summary_container = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 232, 26))
-            summary_container.addSubview_(self.summary_label)
-            summary_container.addSubview_(self.summary_slider)
-            summary_container.addSubview_(self.summary_badge)
-            self.summary_slider_item = rumps.MenuItem("📝 Summary: Off")
-            self.summary_slider_item._menuitem.setView_(summary_container)
-
-            # Native NSSegmentedControl for Summarizer Engine (⚡ Gemini API vs 📚 NotebookLM)
-            class _ProviderSegmentHandler(AppKit.NSObject):
-                def initWithApp_(self, app_inst):
-                    self = objc.super(_ProviderSegmentHandler, self).init()
-                    if self is not None:
-                        self.app = app_inst
-                    return self
-
-                def handleSegment_(self, sender):
-                    idx = sender.selectedSegment()
-                    if idx == 0:
-                        self.app.summarizer_provider = "gemini_api"
-                    elif idx == 1:
-                        self.app.summarizer_provider = "gemini_notebook"
-
-            self._provider_handler = _ProviderSegmentHandler.alloc().initWithApp_(self)
-            self.provider_segment = AppKit.NSSegmentedControl.alloc().initWithFrame_(AppKit.NSMakeRect(18, 2, 192, 22))
-            self.provider_segment.setSegmentCount_(2)
-            self.provider_segment.setLabel_forSegment_("⚡ Gemini API", 0)
-            self.provider_segment.setLabel_forSegment_("📚 NotebookLM", 1)
-            self.provider_segment.setTrackingMode_(AppKit.NSSegmentSwitchTrackingSelectOne)
-            self.provider_segment.setTarget_(self._provider_handler)
-            self.provider_segment.setAction_(objc.selector(self._provider_handler.handleSegment_, signature=b"v@:@"))
-            initial_idx = 1 if (settings.summarizer_provider or "").lower() in ("gemini_notebook", "notebooklm") else 0
-            self.provider_segment.setSelectedSegment_(initial_idx)
-
-            prov_container = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 228, 26))
-            prov_container.addSubview_(self.provider_segment)
-            self.provider_segment_item = rumps.MenuItem("")
-            self.provider_segment_item._menuitem.setView_(prov_container)
-
             # Native NSSwitch Checkbox / Toggle Mode Rows (Won't dismiss menu when toggled)
             class _ToggleSwitchHandler(AppKit.NSObject):
                 def initWithApp_key_(self, app_inst, key_name):
@@ -497,12 +404,6 @@ class QuadernoMenubarApp(AppBase):
         except Exception:
             self.page_control_item = rumps.MenuItem("◀ Prev  |  Next ▶", callback=self.nav_next)
             self.page_slider_item = rumps.MenuItem("")
-            self.summary_slider_item = rumps.MenuItem("📝 Summary: Off", callback=self.cycle_summary_pages)
-            self.summary_slider = None
-            self.summary_badge = None
-            init_prov_label = "⚡ Gemini API" if settings.summarizer_provider == "gemini_api" else "📚 NotebookLM"
-            self.provider_segment_item = rumps.MenuItem(f"Engine: {init_prov_label}", callback=self.toggle_summarizer_provider)
-            self.provider_segment = None
             self.watch_mode_item = rumps.MenuItem("🪞 Preview Mirror", callback=self.toggle_watch_mode)
             self.watch_mode_item.state = False
             self.watch_switch = None
@@ -515,8 +416,6 @@ class QuadernoMenubarApp(AppBase):
         self.sync_now_item = rumps.MenuItem("🔄 Sync Now", callback=self.trigger_sync_now)
         self.open_folder_item = rumps.MenuItem("📁 Open Quaderno Folder", callback=self.open_quaderno_folder)
 
-        self._summary_pages: int = 0
-        self._summarizer_provider: str = settings.summarizer_provider or "gemini_api"
         self._last_user_nav_time: float = 0.0
         self._last_reading_state = None
         self._last_synced_doc: Optional[str] = None
@@ -538,8 +437,6 @@ class QuadernoMenubarApp(AppBase):
             self.page_slider_item,
             self.chapters_menu,
             None,  # Separator
-            self.summary_slider_item,
-            self.provider_segment_item,
             self.watch_mode_item,
             self.sync_now_item,
             self.open_folder_item,
@@ -557,76 +454,6 @@ class QuadernoMenubarApp(AppBase):
         # Timer for polling device status and live sync (every 10 seconds / 0.1 Hz)
         self.timer = rumps.Timer(self.on_tick, settings.telemetry_poll_interval)
         self.timer.start()
-
-    @property
-    def summary_pages(self) -> int:
-        """Get target summary page length (0 = Off / direct push, 1-5 = summary page count)."""
-        if hasattr(self, "summary_slider") and self.summary_slider is not None:
-            try:
-                return int(round(self.summary_slider.doubleValue()))
-            except Exception:
-                pass
-        return getattr(self, "_summary_pages", 0)
-
-    @summary_pages.setter
-    def summary_pages(self, val: int):
-        target = max(0, min(5, int(val)))
-        self._summary_pages = target
-        if hasattr(self, "summary_slider") and self.summary_slider is not None:
-            try:
-                self.summary_slider.setDoubleValue_(float(target))
-            except Exception:
-                pass
-        self._update_summary_ui(target)
-
-    def _update_summary_ui(self, val: Optional[int] = None):
-        """Update summary badge and menu item title."""
-        pages = self.summary_pages if val is None else val
-        text = "Off" if pages == 0 else (f"{pages} pg" if pages == 1 else f"{pages} pgs")
-        if hasattr(self, "summary_badge") and self.summary_badge is not None:
-            try:
-                self.summary_badge.setStringValue_(text)
-            except Exception:
-                pass
-        if hasattr(self, "summary_slider_item") and self.summary_slider_item is not None:
-            self.summary_slider_item.title = f"📝 Summary: {text}"
-
-    def cycle_summary_pages(self, sender=None):
-        """Cycle summary page setting in fallback mode (0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 0)."""
-        cur = self.summary_pages
-        nxt = (cur + 1) if cur < 5 else 0
-        self.summary_pages = nxt
-
-    @property
-    def summarizer_provider(self) -> str:
-        """Get active summarizer provider ('gemini_api' or 'gemini_notebook')."""
-        if hasattr(self, "provider_segment") and self.provider_segment is not None:
-            try:
-                idx = self.provider_segment.selectedSegment()
-                return "gemini_notebook" if idx == 1 else "gemini_api"
-            except Exception:
-                pass
-        return getattr(self, "_summarizer_provider", settings.summarizer_provider or "gemini_api")
-
-    @summarizer_provider.setter
-    def summarizer_provider(self, val: str):
-        target = "gemini_notebook" if "notebook" in str(val).lower() else "gemini_api"
-        self._summarizer_provider = target
-        settings.summarizer_provider = target
-        if hasattr(self, "provider_segment") and self.provider_segment is not None:
-            try:
-                idx = 1 if target == "gemini_notebook" else 0
-                self.provider_segment.setSelectedSegment_(idx)
-            except Exception:
-                pass
-        if hasattr(self, "provider_segment_item") and self.provider_segment_item is not None:
-            label = "⚡ Gemini API" if target == "gemini_api" else "📚 NotebookLM"
-            self.provider_segment_item.title = f"Engine: {label}"
-
-    def toggle_summarizer_provider(self, sender=None):
-        """Toggle between gemini_api and gemini_notebook in fallback mode."""
-        nxt = "gemini_notebook" if self.summarizer_provider == "gemini_api" else "gemini_api"
-        self.summarizer_provider = nxt
 
     def trigger_sync_now(self, _):
         """Run an immediate background folder sync pass."""
@@ -853,12 +680,9 @@ class QuadernoMenubarApp(AppBase):
         page: int = 1,
         destination_folder: Optional[str] = None,
     ):
-        """Execute push or summarize based on summary_pages slider and summarizer_provider settings."""
-        pages = self.summary_pages
-        is_summary = pages > 0
-
+        """Execute document/URL push with folder selection dialog and E-ink optimization."""
         target_dest = destination_folder
-        if not is_summary and target_dest is None:
+        if target_dest is None:
             # Prompt user with native macOS Folder Browser dialog rooted at mirror
             last_used = getattr(self, "_last_dest_folder", None) or "Document"
             resp = prompt_folder_dialog(
@@ -872,37 +696,23 @@ class QuadernoMenubarApp(AppBase):
             target_dest = resp.strip() or "Document"
             self._last_dest_folder = target_dest
 
-        provider = self.summarizer_provider
-        prov_label = "API" if provider == "gemini_api" else "NotebookLM"
-        action_verb = f"Summarizing ({pages} pg{'s' if pages > 1 else ''} via {prov_label})..." if is_summary else "Ingesting..."
-        success_title = "Summary Pushed" if is_summary else "Pushed to Device"
-
         async def _worker_coro():
             try:
                 display_name = title or (Path(target).name if Path(target).exists() else target[:40])
-                page_suffix = f" (Page {page})" if page > 1 and not is_summary else ""
-                notify("Quaderno Companion", action_verb, f"Processing {display_name}{page_suffix}...")
-                if is_summary:
-                    res = await agent.summarize_and_push(
-                        text_or_url=target,
-                        title=title,
-                        pages=pages,
-                        provider=provider,
-                    )
-                else:
-                    res = await tool_push_document(
-                        source_url_or_path=target,
-                        title=title,
-                        page=page,
-                        destination_folder=target_dest,
-                    )
+                page_suffix = f" (Page {page})" if page > 1 else ""
+                notify("Quaderno Companion", "Ingesting...", f"Processing {display_name}{page_suffix}...")
+                res = await tool_push_document(
+                    source_url_or_path=target,
+                    title=title,
+                    page=page,
+                    destination_folder=target_dest,
+                )
 
-                notify("Quaderno Companion", success_title, res.get("message", "Sent to device."))
+                notify("Quaderno Companion", "Pushed to Device", res.get("message", "Sent to device."))
                 self.refresh_telemetry()
             except Exception as e:
-                logger.error(f"Error executing push/summarize: {e}", exc_info=True)
-                err_title = "Quaderno Summarize Error" if is_summary else "Quaderno Push Error"
-                show_alert(err_title, str(e))
+                logger.error(f"Error executing push: {e}", exc_info=True)
+                show_alert("Quaderno Push Error", str(e))
 
         return bg_worker.submit(_worker_coro())
 
@@ -959,13 +769,11 @@ class QuadernoMenubarApp(AppBase):
             pass  # User cancelled dialog
 
     def push_url_dialog(self, _):
-        """Prompt user for a URL or ArXiv paper link to push/summarize."""
+        """Prompt user for a URL or ArXiv paper link to push."""
         clip = self._get_clipboard_text().strip()
         default_url = clip if clip.startswith("http") else ""
-        pages = self.summary_pages
-        action_name = f"Summarize URL ({pages} pg{'s' if pages > 1 else ''})" if pages > 0 else "Push to Quaderno"
         url = prompt_text_dialog(
-            title=action_name,
+            title="Push to Quaderno",
             prompt="Enter URL or ArXiv Paper Link:",
             default_text=default_url,
         )
