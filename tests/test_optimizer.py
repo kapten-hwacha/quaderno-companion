@@ -247,4 +247,148 @@ def test_font_family_configuration(tmp_path):
         settings.font_family = orig
 
 
+def test_textbook_with_cover_page_margin_cropping():
+    """Verify that a full-bleed/large cover page does not prevent margin trimming on interior pages."""
+    doc = fitz.open()
+
+    # Page 0: Textbook Cover (Title near top, artwork in center, publisher at bottom)
+    cover = doc.new_page(width=595, height=842)
+    cover.insert_textbox(fitz.Rect(50, 40, 545, 120), "ADVANCED QUANTUM MECHANICS", fontsize=24)
+    cover.draw_rect(fitz.Rect(50, 150, 545, 700), fill=(0.8, 0.8, 0.8))
+    cover.insert_textbox(fitz.Rect(50, 750, 545, 800), "Academic Press 2026", fontsize=14)
+
+    # Pages 1 to 4: Interior textbook pages with wide 1.5-inch margins (content ~320x450 pt)
+    for i in range(1, 5):
+        page = doc.new_page(width=595, height=842)
+        # Content centered with large margins
+        page.insert_textbox(
+            fitz.Rect(140, 180, 460, 630),
+            f"Chapter {i}: Schrödinger Equation Applications\n\n"
+            "This is standard body reading text formatted with wide academic margins. "
+            "On an E-ink screen, these wide margins should be cropped out so that the font size "
+            "is enlarged and comfortable to read.",
+            fontsize=12,
+        )
+
+    src_bytes = doc.tobytes()
+    doc.close()
+
+    optimizer = EinkOptimizer(profile_name="A4")
+    out_bytes = optimizer.optimize_pdf(src_bytes, trim_margins=True)
+
+    out_doc = fitz.open(stream=out_bytes, filetype="pdf")
+    assert len(out_doc) == 5
+
+    # Page 0 (Cover) content should be preserved
+    cover_text = out_doc[0].get_text()
+    assert "ADVANCED QUANTUM MECHANICS" in cover_text
+    assert "Academic Press 2026" in cover_text
+
+    # Verify interior pages (1-4) had margins cropped:
+    # In source document, text bounding box width was ~320 pt on a 595 pt page (~53% width).
+    # After margin trimming, the content should occupy >= 80% of the target page width!
+    p1_blocks = out_doc[1].get_text("blocks")
+    assert len(p1_blocks) > 0
+    p1_text_rect = fitz.Rect(p1_blocks[0][:4])
+    for b in p1_blocks[1:]:
+        p1_text_rect |= fitz.Rect(b[:4])
+
+    # Text box width on the cropped page should be significantly wider than in uncropped page (>= 480 pt)
+    assert p1_text_rect.width >= 480.0, f"Expected cropped text width >= 480, got {p1_text_rect.width}"
+
+    # Verify visual scale consistency across interior pages 1 and 2
+    p2_blocks = out_doc[2].get_text("blocks")
+    p2_text_rect = fitz.Rect(p2_blocks[0][:4])
+    for b in p2_blocks[1:]:
+        p2_text_rect |= fitz.Rect(b[:4])
+    assert abs(p1_text_rect.width - p2_text_rect.width) < 1.0
+
+    out_doc.close()
+
+
+def test_textbook_with_back_cover_outlier():
+    """Verify that a back cover outlier does not disrupt interior reading page margin trimming."""
+    doc = fitz.open()
+
+    # Page 0: Cover
+    p0 = doc.new_page(width=595, height=842)
+    p0.draw_rect(fitz.Rect(30, 30, 565, 810), fill=(0.7, 0.7, 0.7))
+
+    # Pages 1..3: Interior pages with wide margins
+    for i in range(1, 4):
+        p = doc.new_page(width=595, height=842)
+        p.insert_textbox(fitz.Rect(150, 200, 450, 600), f"Body text page {i}", fontsize=12)
+
+    # Page 4: Back Cover (Full bleed blurb and barcode)
+    p4 = doc.new_page(width=595, height=842)
+    p4.draw_rect(fitz.Rect(20, 20, 575, 820), fill=(0.6, 0.6, 0.6))
+
+    src_bytes = doc.tobytes()
+    doc.close()
+
+    optimizer = EinkOptimizer(profile_name="A4")
+    out_bytes = optimizer.optimize_pdf(src_bytes, trim_margins=True)
+
+    out_doc = fitz.open(stream=out_bytes, filetype="pdf")
+    assert len(out_doc) == 5
+
+    # Check that interior page 1 is properly scaled up despite front & back covers
+    p1_orig_blocks = fitz.open(stream=src_bytes, filetype="pdf")[1].get_text("blocks")
+    p1_orig_width = p1_orig_blocks[0][2] - p1_orig_blocks[0][0]
+
+    p1_blocks = out_doc[1].get_text("blocks")
+    assert len(p1_blocks) > 0
+    p1_cropped_width = p1_blocks[0][2] - p1_blocks[0][0]
+
+    # Margins should be cropped, magnifying the text substantially (scale factor >= 2.0x)
+    scale_factor = p1_cropped_width / p1_orig_width
+    assert scale_factor >= 2.0, f"Expected scale factor >= 2.0, got {scale_factor}"
+
+    out_doc.close()
+
+
+def test_two_page_document_without_cover():
+    """Verify that a standard 2-page document with normal margins maintains uniform scale across both pages."""
+    doc = fitz.open()
+
+    # Page 1: Normal letter/article page
+    p1 = doc.new_page(width=595, height=842)
+    p1.insert_textbox(fitz.Rect(100, 100, 495, 700), "Letter Page 1 with regular margins.", fontsize=12)
+
+    # Page 2: Short conclusion
+    p2 = doc.new_page(width=595, height=842)
+    p2.insert_textbox(fitz.Rect(100, 100, 495, 300), "Letter Page 2 with short ending note.", fontsize=12)
+
+    src_bytes = doc.tobytes()
+    doc.close()
+
+    optimizer = EinkOptimizer(profile_name="A4")
+    out_bytes = optimizer.optimize_pdf(src_bytes, trim_margins=True)
+
+    out_doc = fitz.open(stream=out_bytes, filetype="pdf")
+    assert len(out_doc) == 2
+
+    # Compute magnification scale factor on both pages
+    src_doc = fitz.open(stream=src_bytes, filetype="pdf")
+    orig_b1 = src_doc[0].get_text("blocks")[0]
+    orig_b2 = src_doc[1].get_text("blocks")[0]
+    orig_w1 = orig_b1[2] - orig_b1[0]
+    orig_w2 = orig_b2[2] - orig_b2[0]
+
+    crop_b1 = out_doc[0].get_text("blocks")[0]
+    crop_b2 = out_doc[1].get_text("blocks")[0]
+    crop_w1 = crop_b1[2] - crop_b1[0]
+    crop_w2 = crop_b2[2] - crop_b2[0]
+
+    scale1 = crop_w1 / orig_w1
+    scale2 = crop_w2 / orig_w2
+
+    # Both pages should share the exact same scale factor
+    assert abs(scale1 - scale2) < 0.01, f"Expected matching scales, got {scale1} and {scale2}"
+
+    out_doc.close()
+    src_doc.close()
+
+
+
 

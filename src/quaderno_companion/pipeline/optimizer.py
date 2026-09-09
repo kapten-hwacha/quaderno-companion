@@ -63,13 +63,8 @@ class EinkOptimizer:
         target_pt_w, target_pt_h = fitz.paper_size(paper_code)
         target_rect = fitz.Rect(0, 0, target_pt_w, target_pt_h)
 
-        # Pass 1: Detect per-page content bounding boxes and find maximum uniform dimensions per orientation
+        # Pass 1: Detect per-page content bounding boxes
         raw_page_data = []
-        max_w_portrait = 0.0
-        max_h_portrait = 0.0
-        max_w_landscape = 0.0
-        max_h_landscape = 0.0
-
         for page_idx in range(len(doc)):
             src_page = doc[page_idx]
             page_rect = src_page.rect
@@ -85,34 +80,75 @@ class EinkOptimizer:
 
             raw_page_data.append((src_page, page_rect, is_landscape, raw_bbox))
 
-            if is_landscape:
-                max_w_landscape = max(max_w_landscape, raw_bbox.width)
-                max_h_landscape = max(max_h_landscape, raw_bbox.height)
-            else:
-                max_w_portrait = max(max_w_portrait, raw_bbox.width)
-                max_h_portrait = max(max_h_portrait, raw_bbox.height)
+        is_special_page = self._classify_special_pages(raw_page_data) if trim_margins else [False] * len(doc)
+
+        # Collect body dimensions per orientation (excluding covers and full-bleed outliers)
+        body_w_portrait: List[float] = []
+        body_h_portrait: List[float] = []
+        body_w_landscape: List[float] = []
+        body_h_landscape: List[float] = []
+
+        for idx, (_, page_rect, is_landscape, raw_bbox) in enumerate(raw_page_data):
+            if not is_special_page[idx]:
+                if is_landscape:
+                    body_w_landscape.append(raw_bbox.width)
+                    body_h_landscape.append(raw_bbox.height)
+                else:
+                    body_w_portrait.append(raw_bbox.width)
+                    body_h_portrait.append(raw_bbox.height)
+
+        def _get_uniform_dim(dims: List[float], fallback: float = 0.0) -> float:
+            if not dims:
+                return fallback
+            if len(dims) >= 10:
+                s = sorted(dims)
+                idx = int(len(s) * 0.95)
+                return s[min(idx, len(s) - 1)]
+            return max(dims)
+
+        fallback_w_portrait = max((d[3].width for d in raw_page_data if not d[2]), default=0.0)
+        fallback_h_portrait = max((d[3].height for d in raw_page_data if not d[2]), default=0.0)
+        fallback_w_landscape = max((d[3].width for d in raw_page_data if d[2]), default=0.0)
+        fallback_h_landscape = max((d[3].height for d in raw_page_data if d[2]), default=0.0)
+
+        uniform_w_portrait = _get_uniform_dim(body_w_portrait, fallback_w_portrait)
+        uniform_h_portrait = _get_uniform_dim(body_h_portrait, fallback_h_portrait)
+        uniform_w_landscape = _get_uniform_dim(body_w_landscape, fallback_w_landscape)
+        uniform_h_landscape = _get_uniform_dim(body_h_landscape, fallback_h_landscape)
 
         # Pass 2: Position uniform-sized crop box around content per page to preserve constant scale
         for page_idx, (src_page, page_rect, is_landscape, raw_bbox) in enumerate(raw_page_data):
+            is_special = is_special_page[page_idx]
+
             if trim_margins:
                 page_w = target_pt_h if is_landscape else target_pt_w
                 page_h = target_pt_w if is_landscape else target_pt_h
-                uniform_w = max_w_landscape if is_landscape else max_w_portrait
-                uniform_h = max_h_landscape if is_landscape else max_h_portrait
 
-                # Bound uniform dimensions to page boundaries
-                uniform_w = min(uniform_w, page_rect.width)
-                uniform_h = min(uniform_h, page_rect.height)
+                if is_special:
+                    # For cover or full-bleed outlier page:
+                    # If page content is near full bleed (>= 95%), use page_rect so no edge art is trimmed
+                    if raw_bbox.width >= page_rect.width * 0.95 and raw_bbox.height >= page_rect.height * 0.95:
+                        content_rect = page_rect
+                    else:
+                        content_rect = raw_bbox
+                else:
+                    base_w = uniform_w_landscape if is_landscape else uniform_w_portrait
+                    base_h = uniform_h_landscape if is_landscape else uniform_h_portrait
 
-                # Center uniform box around this page's content, clamped within page bounds
-                cx = (raw_bbox.x0 + raw_bbox.x1) / 2.0
-                cy = (raw_bbox.y0 + raw_bbox.y1) / 2.0
+                    # Bound uniform dimensions to page boundaries
+                    # And ensure content is never clipped if an individual page has wider content
+                    crop_w = min(page_rect.width, max(base_w, raw_bbox.width))
+                    crop_h = min(page_rect.height, max(base_h, raw_bbox.height))
 
-                x0 = max(page_rect.x0, min(page_rect.x1 - uniform_w, cx - uniform_w / 2.0))
-                y0 = max(page_rect.y0, min(page_rect.y1 - uniform_h, cy - uniform_h / 2.0))
-                x1 = min(page_rect.x1, x0 + uniform_w)
-                y1 = min(page_rect.y1, y0 + uniform_h)
-                content_rect = fitz.Rect(x0, y0, x1, y1)
+                    # Center uniform box around this page's content, clamped within page bounds
+                    cx = (raw_bbox.x0 + raw_bbox.x1) / 2.0
+                    cy = (raw_bbox.y0 + raw_bbox.y1) / 2.0
+
+                    x0 = max(page_rect.x0, min(page_rect.x1 - crop_w, cx - crop_w / 2.0))
+                    y0 = max(page_rect.y0, min(page_rect.y1 - crop_h, cy - crop_h / 2.0))
+                    x1 = min(page_rect.x1, x0 + crop_w)
+                    y1 = min(page_rect.y1, y0 + crop_h)
+                    content_rect = fitz.Rect(x0, y0, x1, y1)
             else:
                 page_w = page_rect.width
                 page_h = page_rect.height
@@ -294,6 +330,80 @@ class EinkOptimizer:
         else:
             raise ValueError(f"Unsupported file format for E-ink optimization: {suffix}")
 
+    def _classify_special_pages(self, raw_page_data: List[Any]) -> List[bool]:
+        """Identify cover pages, back covers, or full-bleed outlier pages.
+
+        Excludes these pages from uniform body dimension calculations so that a
+        full-page cover doesn't prevent margin trimming on interior textbook pages.
+        """
+        total_pages = len(raw_page_data)
+        if total_pages <= 1:
+            return [False] * total_pages
+
+        is_special = [False] * total_pages
+
+        area_ratios: List[float] = []
+        w_ratios: List[float] = []
+        h_ratios: List[float] = []
+        for _, page_rect, _, raw_bbox in raw_page_data:
+            pw = page_rect.width
+            ph = page_rect.height
+            if pw > 0 and ph > 0:
+                w_r = raw_bbox.width / pw
+                h_r = raw_bbox.height / ph
+                a_r = (raw_bbox.width * raw_bbox.height) / (pw * ph)
+            else:
+                w_r = h_r = a_r = 1.0
+            w_ratios.append(w_r)
+            h_ratios.append(h_r)
+            area_ratios.append(a_r)
+
+        # Compute interior baseline (excluding page 0 and optionally last page)
+        if total_pages >= 3:
+            interior_indices = list(range(1, total_pages - 1))
+        else:
+            interior_indices = [1]
+
+        interior_areas = [area_ratios[i] for i in interior_indices]
+        interior_w = [w_ratios[i] for i in interior_indices]
+        interior_h = [h_ratios[i] for i in interior_indices]
+
+        sorted_areas = sorted(interior_areas)
+        med_area = sorted_areas[len(sorted_areas) // 2]
+        sorted_w = sorted(interior_w)
+        med_w = sorted_w[len(sorted_w) // 2]
+        sorted_h = sorted(interior_h)
+        med_h = sorted_h[len(sorted_h) // 2]
+
+        # 1. Front Cover (Page 0)
+        # Check if Page 0 behaves like a cover:
+        # - Has near full-bleed dimensions (w_ratio >= 0.88 and h_ratio >= 0.88) while interior has margins (med_w < 0.85 or med_h < 0.85)
+        # - Or area is significantly larger than interior pages (area >= 0.70 and area >= med_area * 1.25)
+        if (w_ratios[0] >= 0.88 and h_ratios[0] >= 0.88 and (med_w < 0.85 or med_h < 0.85)) or (
+            area_ratios[0] >= 0.70 and area_ratios[0] >= med_area * 1.25
+        ):
+            is_special[0] = True
+
+        # 2. Back Cover (Last page, if doc has >= 4 pages)
+        if total_pages >= 4:
+            last = total_pages - 1
+            if (w_ratios[last] >= 0.88 and h_ratios[last] >= 0.88 and (med_w < 0.85 or med_h < 0.85)) or (
+                area_ratios[last] >= 0.70 and area_ratios[last] >= med_area * 1.25
+            ):
+                is_special[last] = True
+
+        # 3. Full-bleed outlier pages anywhere in the document
+        for i in range(total_pages):
+            if not is_special[i]:
+                if w_ratios[i] >= 0.95 and h_ratios[i] >= 0.95 and med_area < 0.82:
+                    is_special[i] = True
+
+        # Safety: if all pages ended up classified as special, reset to False so normal uniform logic applies
+        if all(is_special):
+            is_special = [False] * total_pages
+
+        return is_special
+
     def _detect_content_bbox(self, page: Any, margin_padding: float = 12.0) -> Any:
         """Find the bounding box of text, drawings, and images on a page."""
         import pymupdf as fitz
@@ -315,7 +425,7 @@ class EinkOptimizer:
                 # item: (type, (x0, y0, x1, y1))
                 r = fitz.Rect(item[1])
                 if not r.is_empty:
-                    if r.width >= page_rect.width * 0.98 and r.height >= page_rect.height * 0.98:
+                    if r.width >= page_rect.width * 0.96 and r.height >= page_rect.height * 0.96:
                         continue
                     bbox |= r
         except Exception:
