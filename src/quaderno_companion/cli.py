@@ -566,6 +566,8 @@ def install_service():
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
     <key>StandardOutPath</key>
     <string>{Path.home()}/.config/quaderno/companion.log</string>
     <key>StandardErrorPath</key>

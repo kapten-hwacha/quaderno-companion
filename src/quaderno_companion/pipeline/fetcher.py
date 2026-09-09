@@ -123,16 +123,22 @@ class ContentFetcher:
             raise ValueError("Access to system directory files is blocked for security.")
 
     def _create_http_client(self, timeout: float = 30.0) -> httpx.AsyncClient:
-        """Create an HTTP client with SSRF redirect validation."""
+        """Create an HTTP client with SSRF request and redirect validation."""
         async def _check_redirect(response: httpx.Response) -> None:
             if response.is_redirect and "location" in response.headers:
                 target_url = str(response.url.join(response.headers["location"]))
                 self._validate_remote_url(target_url)
 
+        async def _check_request(request: httpx.Request) -> None:
+            self._validate_remote_url(str(request.url))
+
         return httpx.AsyncClient(
             follow_redirects=True,
             timeout=timeout,
-            event_hooks={"response": [_check_redirect]},
+            event_hooks={
+                "request": [_check_request],
+                "response": [_check_redirect],
+            },
         )
 
     async def fetch(

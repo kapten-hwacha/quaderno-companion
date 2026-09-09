@@ -194,3 +194,38 @@ def test_resolve_destination_folder_default_to_document():
         dest = _resolve_destination_folder(explicit_dest=None)
         assert dest == "Document"
 
+
+def test_norm_remote_path_traversal():
+    """Verify _norm_remote_path sanitizes and blocks path traversal attempts."""
+    from quaderno_companion.fs.syncer import _norm_remote_path
+
+    assert _norm_remote_path("Document/../../etc/passwd") == ""
+    assert _norm_remote_path("../../.ssh/id_rsa") == ""
+    assert _norm_remote_path("Document/folder/../evil.pdf") == "evil.pdf"
+    assert _norm_remote_path("Document/folder/sub/safe.pdf") == "folder/sub/safe.pdf"
+    assert _norm_remote_path(None) == ""
+    assert _norm_remote_path("Document") == ""
+
+
+def test_syncer_path_traversal_prevention(tmp_path, mock_quaderno_client):
+    """Verify syncer rejects any remote entries attempting to write outside sync_dir."""
+    sync_dir = tmp_path / "sync_folder"
+    state_file = tmp_path / "state.json"
+    outside_file = tmp_path / "should_not_exist.pdf"
+
+    # Craft mock client returning path traversal entry paths
+    mock_quaderno_client.list_all_documents.return_value = [
+        {"entry_id": "root", "entry_name": "Document", "entry_path": "Document", "entry_type": "folder"},
+        {"entry_id": "doc-evil-1", "entry_name": "passwd", "entry_path": "Document/../../etc/passwd", "entry_type": "document", "file_size": 100, "modified_date": "2026-08-16T10:00:00Z"},
+        {"entry_id": "doc-evil-2", "entry_name": "outside.pdf", "entry_path": "../../should_not_exist.pdf", "entry_type": "document", "file_size": 100, "modified_date": "2026-08-16T10:00:00Z"},
+        {"entry_id": "f-evil", "entry_name": "escape", "entry_path": "Document/../../escaped_dir", "entry_type": "folder"},
+    ]
+
+    syncer = QuadernoSyncer(sync_dir=sync_dir, state_path=state_file)
+    res = syncer.sync_pass(client=mock_quaderno_client)
+
+    # Neither evil file should be pulled or written
+    assert not outside_file.exists()
+    assert not (tmp_path / "escaped_dir").exists()
+    assert len(res.pulled) == 0
+

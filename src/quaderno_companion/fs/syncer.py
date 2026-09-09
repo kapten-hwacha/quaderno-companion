@@ -41,13 +41,33 @@ class SyncResult:
 
 
 def _norm_remote_path(p: Optional[str]) -> str:
-    """Normalize Quaderno remote path to relative path in local mirror (mapping Document/ to root)."""
+    """Normalize Quaderno remote path to relative path in local mirror (mapping Document/ to root).
+
+    Sanitizes and neutralizes any directory traversal components.
+    """
     p = (p or "").replace("\\", "/").strip("/")
     if not p or p.lower() == "document":
         return ""
     if p.lower().startswith("document/"):
-        return p[9:].strip("/")
-    return p
+        p = p[9:].strip("/")
+    norm = os.path.normpath(p).replace("\\", "/").strip("/")
+    if norm == "." or norm.startswith("..") or "/../" in f"/{norm}/":
+        return ""
+    return norm
+
+
+def _safe_resolve_local_path(base_dir: Path, rel_path: str) -> Optional[Path]:
+    """Resolve a relative path against base_dir and ensure it does not escape base_dir."""
+    if not rel_path:
+        return None
+    try:
+        base_resolved = base_dir.resolve()
+        target = (base_dir / rel_path).resolve()
+        if target.is_relative_to(base_resolved):
+            return target
+    except Exception:
+        pass
+    return None
 
 
 def _to_remote_folder(rel_folder: str) -> str:
@@ -236,7 +256,10 @@ class QuadernoSyncer:
                 continue
             if r_folder in prev_folders and r_folder not in local_folders:
                 continue
-            local_target = self.sync_dir / r_folder
+            local_target = _safe_resolve_local_path(self.sync_dir, r_folder)
+            if not local_target:
+                logger.warning(f"Skipping remote folder with invalid or escaping path: {r_folder}")
+                continue
             if not local_target.exists():
                 try:
                     local_target.mkdir(parents=True, exist_ok=True)
@@ -267,7 +290,10 @@ class QuadernoSyncer:
             doc_id = str(doc_id_raw)
             r_size = r_info.get("file_size", 0)
             r_mtime = str(r_info.get("modified_date", ""))
-            local_path = self.sync_dir / rel_path
+            local_path = _safe_resolve_local_path(self.sync_dir, rel_path)
+            if not local_path:
+                logger.warning(f"Skipping remote file with invalid or escaping path: {rel_path}")
+                continue
 
             prev_state = state.get(rel_path, {})
 
@@ -357,7 +383,10 @@ class QuadernoSyncer:
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         stem, ext = os.path.splitext(rel_path)
                         conflict_rel = f"{stem} (Quaderno Conflict {ts}){ext}"
-                        conflict_local = self.sync_dir / conflict_rel
+                        conflict_local = _safe_resolve_local_path(self.sync_dir, conflict_rel)
+                        if not conflict_local:
+                            logger.warning(f"Skipping conflict download for escaping path: {conflict_rel}")
+                            continue
                         
                         _download_remote_to_file(client, doc_id, conflict_local, mtime=r_mtime)
                         result.pulled.append(conflict_rel)
@@ -390,11 +419,13 @@ class QuadernoSyncer:
             if prev_state and prev_state.get("doc_id"):
                 # Was on remote, deleted on remote -> propagate local deletion
                 try:
-                    local_path.unlink()
-                    result.deleted.append(rel_path)
-                    state.pop(rel_path, None)
-                    logger.info(f"Propagated remote deletion to local file: {rel_path}")
-                    continue
+                    safe_local = _safe_resolve_local_path(self.sync_dir, rel_path)
+                    if safe_local and safe_local.exists():
+                        safe_local.unlink()
+                        result.deleted.append(rel_path)
+                        state.pop(rel_path, None)
+                        logger.info(f"Propagated remote deletion to local file: {rel_path}")
+                        continue
                 except Exception as e:
                     err = f"Failed to delete local file '{rel_path}': {e}"
                     logger.error(err)

@@ -220,10 +220,15 @@ def get_safari_active_tab() -> Optional[Dict[str, str]]:
 
 def get_chromium_active_tab(app_name: str = "Google Chrome") -> Optional[Dict[str, str]]:
     """Extract active tab title and URL from Chromium-based browsers (Chrome, Arc, Brave, Edge)."""
+    import re
+    safe_app_name = re.sub(r"[^a-zA-Z0-9 _\-]", "", app_name).strip()
+    if not safe_app_name:
+        return None
+
     script = f"""
     tell application "System Events"
-        if exists (process "{app_name}") then
-            tell application "{app_name}"
+        if exists (process "{safe_app_name}") then
+            tell application "{safe_app_name}"
                 if (count of windows) > 0 then
                     return {{title of active tab of front window, URL of active tab of front window}}
                 end if

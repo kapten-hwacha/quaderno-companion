@@ -77,3 +77,19 @@ def test_get_active_browser_tab_firefox_fallback():
         with patch("quaderno_companion.triggers.browser.get_firefox_active_tab", return_value=fake_tab):
             res = get_active_browser_tab()
             assert res == fake_tab
+
+
+def test_get_chromium_active_tab_sanitization():
+    """Verify get_chromium_active_tab rejects or strips malicious injection strings."""
+    from quaderno_companion.triggers.browser import get_chromium_active_tab
+
+    # If app_name contains only illegal characters, returns None without invoking osascript
+    assert get_chromium_active_tab('"; do shell script "rm -rf /"; "') is None
+
+    # Safe app name passes sanitized string to osascript
+    with patch("subprocess.check_output", return_value="Title, https://example.com") as mock_sub:
+        res = get_chromium_active_tab("Google Chrome")
+        assert res is not None
+        assert res["browser"] == "Google Chrome"
+        called_cmd = mock_sub.call_args[0][0]
+        assert "Google Chrome" in called_cmd[2]
