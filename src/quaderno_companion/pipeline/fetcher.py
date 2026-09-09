@@ -216,6 +216,40 @@ class ContentFetcher:
                     filename=self._sanitize_filename(f"{title}.pdf"),
                 )
 
+            # EPUB or MOBI e-books
+            url_lower = source_url_or_path.lower().split("?")[0]
+            if (
+                "application/epub+zip" in content_type
+                or "application/x-mobipocket-ebook" in content_type
+                or url_lower.endswith((".epub", ".mobi"))
+            ):
+                import pymupdf as fitz
+                from quaderno_companion.config import settings
+                fmt = "epub" if ("epub" in content_type or url_lower.endswith(".epub")) else "mobi"
+                doc = fitz.open(stream=response.content, filetype=fmt)
+                meta_title = (doc.metadata or {}).get("title")
+                title = custom_title or meta_title or self._extract_filename_from_url(source_url_or_path)
+                paper_code = "a5" if "A5" in self.optimizer.profile.name else "a4"
+                target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+                if doc.is_reflowable:
+                    if hasattr(doc, "apply_css"):
+                        doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
+                    doc.layout(width=target_pt_w, height=target_pt_h, fontsize=settings.ebook_font_size)
+                pdf_bytes_tmp = doc.convert_to_pdf()
+                doc.close()
+
+                if optimize_for_eink:
+                    pdf_bytes = self.optimizer.optimize_pdf(pdf_bytes_tmp)
+                else:
+                    pdf_bytes = pdf_bytes_tmp
+
+                return FetchedDocument(
+                    title=title,
+                    pdf_bytes=pdf_bytes,
+                    source_url=source_url_or_path,
+                    filename=self._sanitize_filename(f"{title}.pdf"),
+                )
+
             # HTML / Web page Article (e.g. Wikipedia, blog, news, documentation)
             html_text = response.text
             return self._extract_article_and_render_pdf(
@@ -230,7 +264,7 @@ class ContentFetcher:
         custom_title: Optional[str] = None,
         optimize_for_eink: bool = True,
     ) -> FetchedDocument:
-        """Ingest a local PDF, Markdown, or text file."""
+        """Ingest a local PDF, e-book (EPUB/MOBI), Markdown, image, or text file."""
         suffix = path.suffix.lower()
         title = custom_title or path.stem
 
@@ -240,6 +274,32 @@ class ContentFetcher:
                 pdf_bytes = self.optimizer.optimize_pdf(raw_bytes)
             else:
                 pdf_bytes = raw_bytes
+
+            return FetchedDocument(
+                title=title,
+                pdf_bytes=pdf_bytes,
+                filename=self._sanitize_filename(f"{title}.pdf"),
+            )
+
+        elif suffix in (".epub", ".mobi"):
+            import pymupdf as fitz
+            from quaderno_companion.config import settings
+            doc = fitz.open(str(path))
+            meta_title = (doc.metadata or {}).get("title")
+            if (not custom_title or custom_title == path.stem) and meta_title and meta_title.strip():
+                title = meta_title.strip()
+            paper_code = "a5" if "A5" in self.optimizer.profile.name else "a4"
+            target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+            if doc.is_reflowable:
+                if hasattr(doc, "apply_css"):
+                    doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
+                doc.layout(width=target_pt_w, height=target_pt_h, fontsize=settings.ebook_font_size)
+            pdf_bytes_tmp = doc.convert_to_pdf()
+            doc.close()
+            if optimize_for_eink:
+                pdf_bytes = self.optimizer.optimize_pdf(pdf_bytes_tmp)
+            else:
+                pdf_bytes = pdf_bytes_tmp
 
             return FetchedDocument(
                 title=title,

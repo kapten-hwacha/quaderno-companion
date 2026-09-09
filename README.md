@@ -42,6 +42,7 @@ The agent ingests web pages, academic papers, and reading materials, optimizes t
 
 ## Features
 
+- **Rich Document Ingestion**: Ingests PDFs, e-books (**EPUB** & **MOBI**), web articles, ArXiv papers, Markdown, plain text, and images—auto-compiling and optimizing them into high-contrast E-ink PDFs.
 - **Hardware Tailored**: Native resolution scaling for Quaderno A4 (1650 × 2200, 207 DPI) and A5 (1404 × 1872, 227 DPI).
 - **Intelligent Margin Trimming**: Detects content bounding box and trims excess academic paper margins for maximum text readability.
 - **Ultra-Fast Wireless Push**: Deflates and compresses PDF streams down to <300 KB for near-instant wireless transfer.
@@ -143,7 +144,7 @@ uv run quadctl install-service
 | `uv run quadctl prev` | Returns to the previous page on the Quaderno |
 | `uv run quadctl goto <page>` | Jumps to a specific page number |
 | `uv run quadctl status` | Shows connection status, battery, storage, and active page |
-| `uv run quadctl optimize <in> <out>` | Optimizes a local PDF with margin trimming and scaling |
+| `uv run quadctl optimize <in> <out>` | Optimizes a local document (PDF, EPUB, MOBI, image) with margin trimming and scaling |
 
 ---
 

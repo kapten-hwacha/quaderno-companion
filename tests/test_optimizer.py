@@ -131,3 +131,120 @@ def test_optimizer_preserves_toc():
     assert toc_output[1][:3] == [1, "Chapter 2: Methods", 2]
     assert toc_output[2][:3] == [2, "Section 2.1: Details", 3]
 
+
+def test_optimize_file_epub(tmp_path):
+    """Verify EinkOptimizer.optimize_file converts and optimizes EPUB files."""
+    import io
+    import zipfile
+
+    epub_path = tmp_path / "book.epub"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>""")
+        z.writestr("content.opf", """<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookID" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>EPUB Optimization Test</dc:title></metadata>
+  <manifest><item id="ch1" href="ch1.html" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>""")
+        z.writestr("ch1.html", "<html><body><h1>Optimization Test</h1><p>Sample e-book body.</p></body></html>")
+    epub_path.write_bytes(buf.getvalue())
+
+    optimizer = EinkOptimizer(profile_name="A4")
+    out_bytes, out_filename = optimizer.optimize_file(epub_path)
+
+    assert len(out_bytes) > 0
+    assert out_filename == "EPUB Optimization Test.pdf"
+
+    # Verify output PDF dimensions match A4
+    doc = fitz.open(stream=out_bytes, filetype="pdf")
+    assert len(doc) >= 1
+    assert abs(doc[0].rect.width - 595.0) < 1.0
+    assert abs(doc[0].rect.height - 842.0) < 1.0
+    doc.close()
+
+
+def test_optimize_file_mobi(tmp_path):
+    """Verify EinkOptimizer.optimize_file converts and optimizes MOBI files."""
+    import struct
+
+    mobi_path = tmp_path / "book.mobi"
+    title = "MOBI Test"
+    text = "Testing MOBI to Quaderno PDF conversion."
+    name = (title[:31].encode("ascii", "ignore") + b"\0").ljust(32, b"\0")
+    pdb_hdr = struct.pack(">32sHHIIIIII4s4sIIH", name, 0, 0, 0, 0, 0, 0, 0, 0, b"BOOK", b"MOBI", 0, 0, 2)
+    rec0_offset = len(pdb_hdr) + 2 * 8 + 2
+    rec1_offset = rec0_offset + 256
+    rec_list = struct.pack(">IB3s", rec0_offset, 0, b"\0\0\0") + struct.pack(">IB3s", rec1_offset, 0, b"\0\0\1") + b"\0\0"
+    palmdoc = struct.pack(">HHIHHI", 1, 0, len(text), 1, 4096, 0)
+    mobi_hdr = struct.pack(">4sIII", b"MOBI", 232, 2, 65001) + (b"\0" * (232 - 16))
+    rec0 = (palmdoc + mobi_hdr).ljust(256, b"\0")
+    rec1 = text.encode("utf-8")
+    mobi_path.write_bytes(pdb_hdr + rec_list + rec0 + rec1)
+
+    optimizer = EinkOptimizer(profile_name="A5")
+    out_bytes, out_filename = optimizer.optimize_file(mobi_path)
+
+    assert len(out_bytes) > 0
+    assert out_filename.endswith(".pdf")
+
+    # Verify output PDF dimensions match A5 (420 x 595 pt)
+    doc = fitz.open(stream=out_bytes, filetype="pdf")
+    assert len(doc) >= 1
+    assert abs(doc[0].rect.width - 420.0) < 1.0
+    assert abs(doc[0].rect.height - 595.0) < 1.0
+    doc.close()
+
+
+def test_font_family_configuration(tmp_path):
+    """Verify font_family switching between serif and sans-serif/non-serif."""
+    import io
+    import zipfile
+    from quaderno_companion.config import settings
+
+    epub_path = tmp_path / "font_test.epub"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>""")
+        z.writestr("content.opf", """<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookID" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Font Test</dc:title></metadata>
+  <manifest><item id="ch1" href="ch1.html" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>""")
+        z.writestr("ch1.html", "<html><body><p>Testing font families on e-ink.</p></body></html>")
+    epub_path.write_bytes(buf.getvalue())
+
+    orig = settings.font_family
+    try:
+        # 1. Non-serif / Sans-serif test
+        settings.font_family = "non-serif"
+        assert settings.normalized_font_family == "sans-serif"
+        optimizer = EinkOptimizer(profile_name="A4")
+        out_sans, _ = optimizer.optimize_file(epub_path)
+        doc_sans = fitz.open(stream=out_sans, filetype="pdf")
+        font_names_sans = [f[3] for f in doc_sans[0].get_fonts()]
+        assert any("sans" in name.lower() for name in font_names_sans)
+        doc_sans.close()
+
+        # 2. Serif test
+        settings.font_family = "serif"
+        assert settings.normalized_font_family == "serif"
+        out_serif, _ = optimizer.optimize_file(epub_path)
+        doc_serif = fitz.open(stream=out_serif, filetype="pdf")
+        font_names_serif = [f[3] for f in doc_serif[0].get_fonts()]
+        assert any("charis" in name.lower() or "serif" in name.lower() or "times" in name.lower() for name in font_names_serif)
+        doc_serif.close()
+    finally:
+        settings.font_family = orig
+
+
+

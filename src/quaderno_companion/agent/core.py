@@ -109,9 +109,12 @@ class QuadernoAgent:
                 if local_path.is_file():
                     source_file = str(local_path)
                     title = title or local_path.stem
-                    if local_path.suffix.lower() == ".pdf":
+                    if local_path.suffix.lower() in (".pdf", ".epub", ".mobi"):
                         import pymupdf as fitz
                         doc = fitz.open(local_path)
+                        meta_title = (doc.metadata or {}).get("title")
+                        if (not title or title == local_path.stem) and meta_title and meta_title.strip():
+                            title = meta_title.strip()
                         pages_text = [page.get_text().replace("\x00", "") for page in doc[: max(10, target_pages * 5)]]
                         content_text = "\n\n".join(pages_text)
                         doc.close()

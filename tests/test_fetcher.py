@@ -219,4 +219,71 @@ async def test_sensitive_local_path_validation(tmp_path: Path):
         fetcher._validate_local_path(env_file)
 
 
+def _create_sample_epub(path: Path, title: str = "Test EPUB Book", body: str = "This is a sample EPUB chapter.") -> Path:
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>""")
+        z.writestr("content.opf", f"""<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookID" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>{title}</dc:title><dc:language>en</dc:language></metadata>
+  <manifest><item id="ch1" href="ch1.html" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>""")
+        z.writestr("ch1.html", f"<!DOCTYPE html><html><body><h1>{title}</h1><p>{body}</p></body></html>")
+    path.write_bytes(buf.getvalue())
+    return path
+
+
+def _create_sample_mobi(path: Path, title: str = "Test MOBI Book", text: str = "Hello MOBI World!") -> Path:
+    import struct
+    name = (title[:31].encode("ascii", "ignore") + b"\0").ljust(32, b"\0")
+    pdb_hdr = struct.pack(">32sHHIIIIII4s4sIIH", name, 0, 0, 0, 0, 0, 0, 0, 0, b"BOOK", b"MOBI", 0, 0, 2)
+    rec0_offset = len(pdb_hdr) + 2 * 8 + 2
+    rec1_offset = rec0_offset + 256
+    rec_list = struct.pack(">IB3s", rec0_offset, 0, b"\0\0\0") + struct.pack(">IB3s", rec1_offset, 0, b"\0\0\1") + b"\0\0"
+    palmdoc = struct.pack(">HHIHHI", 1, 0, len(text), 1, 4096, 0)
+    mobi_hdr = struct.pack(">4sIII", b"MOBI", 232, 2, 65001) + (b"\0" * (232 - 16))
+    rec0 = (palmdoc + mobi_hdr).ljust(256, b"\0")
+    rec1 = text.encode("utf-8")
+    path.write_bytes(pdb_hdr + rec_list + rec0 + rec1)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_fetch_local_epub_file(tmp_path: Path):
+    """Verify local EPUB file is ingested, converted to PDF, and optimized for E-ink."""
+    epub_path = tmp_path / "novel.epub"
+    _create_sample_epub(epub_path, title="The Great Gatsby", body="In my younger and more vulnerable years...")
+
+    fetcher = ContentFetcher(profile_name="A4")
+    doc = await fetcher.fetch(str(epub_path), optimize_for_eink=True)
+
+    assert isinstance(doc, FetchedDocument)
+    assert doc.title == "The Great Gatsby"
+    assert len(doc.pdf_bytes) > 0
+    assert doc.filename == "The_Great_Gatsby.pdf"
+
+
+@pytest.mark.asyncio
+async def test_fetch_local_mobi_file(tmp_path: Path):
+    """Verify local MOBI file is ingested, converted to PDF, and optimized for E-ink."""
+    mobi_path = tmp_path / "classic.mobi"
+    _create_sample_mobi(mobi_path, title="Moby Dick", text="Call me Ishmael.")
+
+    fetcher = ContentFetcher(profile_name="A5")
+    doc = await fetcher.fetch(str(mobi_path), optimize_for_eink=True)
+
+    assert isinstance(doc, FetchedDocument)
+    assert doc.title in ("Moby Dick", "classic")
+    assert len(doc.pdf_bytes) > 0
+    assert doc.filename.endswith(".pdf")
+
+
+
 

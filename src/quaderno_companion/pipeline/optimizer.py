@@ -237,6 +237,24 @@ class EinkOptimizer:
             out_bytes = self.optimize_pdf(path, output_path=output_path)
             return out_bytes, f"{title}.pdf"
 
+        elif suffix in (".epub", ".mobi"):
+            import pymupdf as fitz
+            from quaderno_companion.config import settings
+            doc = fitz.open(str(path))
+            meta_title = (doc.metadata or {}).get("title")
+            if meta_title and meta_title.strip():
+                title = meta_title.strip()
+            paper_code = "a5" if "A5" in self.profile.name else "a4"
+            target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+            if doc.is_reflowable:
+                if hasattr(doc, "apply_css"):
+                    doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
+                doc.layout(width=target_pt_w, height=target_pt_h, fontsize=settings.ebook_font_size)
+            pdf_bytes_tmp = doc.convert_to_pdf()
+            doc.close()
+            out_bytes = self.optimize_pdf(pdf_bytes_tmp, output_path=output_path)
+            return out_bytes, f"{title}.pdf"
+
         elif suffix in (".jpg", ".jpeg", ".png", ".webp"):
             import pymupdf as fitz
             img_doc = fitz.open(str(path))

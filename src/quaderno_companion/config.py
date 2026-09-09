@@ -83,6 +83,22 @@ class Settings(BaseSettings):
         default="A4",
         description="Target Quaderno hardware profile (A4: 1650x2200, A5: 1404x1872).",
     )
+    ebook_font_size: float = Field(
+        default=12.0,
+        description="Base font size in points for reflowing EPUB and MOBI e-books.",
+    )
+    font_family: str = Field(
+        default="serif",
+        description="Font family for reflowable e-books and rendered articles ('serif' or 'sans-serif' / 'non-serif').",
+    )
+
+    @property
+    def normalized_font_family(self) -> str:
+        """Return 'serif' or 'sans-serif'."""
+        val = (self.font_family or "").lower().strip()
+        if val in ("sans", "sans-serif", "sans_serif", "non-serif", "nonserif", "helvetica", "arial"):
+            return "sans-serif"
+        return "serif"
 
     # Quaderno Remote Storage
     remote_companion_folder: str = Field(

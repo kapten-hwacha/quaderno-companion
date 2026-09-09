@@ -72,7 +72,7 @@ class ReadingStateResult(TypedDict):
 class PushDocumentParams(BaseModel):
     source_url_or_path: str = Field(
         ...,
-        description="HTTP/HTTPS URL, ArXiv link, or local file path (.pdf, .md, .txt, .html).",
+        description="HTTP/HTTPS URL, ArXiv link, or local file path (.pdf, .epub, .mobi, .md, .txt, .html).",
     )
     title: Optional[str] = Field(
         default=None,

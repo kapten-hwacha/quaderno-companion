@@ -38,12 +38,18 @@ class EinkDocumentBuilder:
 
     def _init_styles(self) -> Dict[str, ParagraphStyle]:
         styles = getSampleStyleSheet()
+        from quaderno_companion.config import settings
+
+        is_serif = settings.normalized_font_family == "serif"
+        font_regular = "Times-Roman" if is_serif else "Helvetica"
+        font_bold = "Times-Bold" if is_serif else "Helvetica-Bold"
+        font_italic = "Times-Italic" if is_serif else "Helvetica-Oblique"
 
         # Custom high-contrast E-ink typography
         title_style = ParagraphStyle(
             "EinkTitle",
             parent=styles["Title"],
-            fontName="Helvetica-Bold",
+            fontName=font_bold,
             fontSize=22,
             leading=28,
             textColor=black,
@@ -54,7 +60,7 @@ class EinkDocumentBuilder:
         subtitle_style = ParagraphStyle(
             "EinkSubtitle",
             parent=styles["Normal"],
-            fontName="Helvetica",
+            fontName=font_regular,
             fontSize=11,
             leading=15,
             textColor=HexColor("#333333"),
@@ -64,7 +70,7 @@ class EinkDocumentBuilder:
         h1_style = ParagraphStyle(
             "EinkH1",
             parent=styles["Heading1"],
-            fontName="Helvetica-Bold",
+            fontName=font_bold,
             fontSize=15,
             leading=20,
             textColor=black,
@@ -76,7 +82,7 @@ class EinkDocumentBuilder:
         h2_style = ParagraphStyle(
             "EinkH2",
             parent=styles["Heading2"],
-            fontName="Helvetica-Bold",
+            fontName=font_bold,
             fontSize=13,
             leading=17,
             textColor=black,
@@ -88,7 +94,7 @@ class EinkDocumentBuilder:
         body_style = ParagraphStyle(
             "EinkBody",
             parent=styles["Normal"],
-            fontName="Helvetica",
+            fontName=font_regular,
             fontSize=10.5,
             leading=15,
             textColor=black,
@@ -106,7 +112,7 @@ class EinkDocumentBuilder:
         callout_style = ParagraphStyle(
             "EinkCallout",
             parent=body_style,
-            fontName="Helvetica-Oblique",
+            fontName=font_italic,
             fontSize=10,
             leading=14,
             textColor=HexColor("#222222"),
@@ -115,7 +121,7 @@ class EinkDocumentBuilder:
         footer_style = ParagraphStyle(
             "EinkFooter",
             parent=styles["Normal"],
-            fontName="Helvetica",
+            fontName=font_regular,
             fontSize=8,
             leading=10,
             textColor=HexColor("#555555"),
@@ -125,7 +131,7 @@ class EinkDocumentBuilder:
         th_style = ParagraphStyle(
             "EinkTH",
             parent=styles["Normal"],
-            fontName="Helvetica-Bold",
+            fontName=font_bold,
             fontSize=8.5,
             leading=11,
             textColor=black,
@@ -134,7 +140,7 @@ class EinkDocumentBuilder:
         td_style = ParagraphStyle(
             "EinkTD",
             parent=styles["Normal"],
-            fontName="Helvetica",
+            fontName=font_regular,
             fontSize=8.0,
             leading=10.5,
             textColor=black,

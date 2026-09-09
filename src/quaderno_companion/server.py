@@ -17,6 +17,7 @@ import io
 import logging
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -265,13 +266,38 @@ async def open_document(
             raw_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
             if len(raw_bytes) > MAX_UPLOAD_BYTES:
                 raise HTTPException(status_code=413, detail="File too large (exceeds 100MB limit).")
-            doc_title = title or file.filename or "Uploaded Document"
+            fname = file.filename or "document.pdf"
+            ext = Path(fname).suffix.lower()
+            doc_title = title or Path(fname).stem or "Uploaded Document"
+
+            if ext in (".epub", ".mobi"):
+                import pymupdf as fitz
+                fmt = ext.lstrip(".")
+                doc = fitz.open(stream=raw_bytes, filetype=fmt)
+                meta_title = (doc.metadata or {}).get("title")
+                if (not title or title == Path(fname).stem) and meta_title and meta_title.strip():
+                    doc_title = meta_title.strip()
+                paper_code = "a5" if "A5" in settings.default_profile else "a4"
+                target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+                if doc.is_reflowable:
+                    if hasattr(doc, "apply_css"):
+                        doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
+                    doc.layout(width=target_pt_w, height=target_pt_h, fontsize=settings.ebook_font_size)
+                raw_bytes = doc.convert_to_pdf()
+                doc.close()
+            elif ext in (".jpg", ".jpeg", ".png", ".webp"):
+                import pymupdf as fitz
+                fmt = ext.lstrip(".")
+                doc = fitz.open(stream=raw_bytes, filetype=fmt)
+                raw_bytes = doc.convert_to_pdf()
+                doc.close()
+
             optimizer = EinkOptimizer(profile_name=settings.default_profile)
             opt_pdf = optimizer.optimize_pdf(raw_bytes, trim_margins=True)
 
             result = await device_manager.open_document(
                 pdf_bytes=opt_pdf,
-                filename=file.filename or "document.pdf",
+                filename=f"{doc_title}.pdf",
                 title=doc_title,
                 page=page,
             )

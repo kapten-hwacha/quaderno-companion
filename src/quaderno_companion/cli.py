@@ -438,24 +438,30 @@ def summarize(
 
 @app.command()
 def optimize(
-    input_pdf: Path = typer.Argument(..., help="Input PDF file path"),
+    input_file: Path = typer.Argument(..., help="Input document path (.pdf, .epub, .mobi, images, markdown, html)"),
     output_pdf: Path = typer.Argument(..., help="Output optimized PDF path"),
     profile: str = typer.Option("A4", "--profile", help="Target screen ('A4' or 'A5')"),
     dither: bool = typer.Option(False, "--dither", help="Apply 1-bit Floyd-Steinberg dithering"),
 ):
-    """Optimize a local PDF for Quaderno hardware (margin trimming, resolution scaling, compression)."""
-    if not input_pdf.exists():
-        rprint(f"[bold red]Input file not found:[/bold red] {input_pdf}")
+    """Optimize a local document (PDF, EPUB, MOBI, image) for Quaderno hardware (margin trimming, resolution scaling, compression)."""
+    if not input_file.exists():
+        rprint(f"[bold red]Input file not found:[/bold red] {input_file}")
         sys.exit(1)
 
     from quaderno_companion.pipeline.optimizer import EinkOptimizer
     optimizer = EinkOptimizer(profile_name=profile)
-    out_bytes = optimizer.optimize_pdf(
-        input_data=input_pdf,
-        trim_margins=True,
-        dither_raster=dither,
-        output_path=output_pdf,
-    )
+    if input_file.suffix.lower() == ".pdf":
+        out_bytes = optimizer.optimize_pdf(
+            input_data=input_file,
+            trim_margins=True,
+            dither_raster=dither,
+            output_path=output_pdf,
+        )
+    else:
+        out_bytes, _ = optimizer.optimize_file(
+            file_path=input_file,
+            output_path=output_pdf,
+        )
     rprint(f"[bold green]✓[/bold green] Optimized PDF saved to [cyan]{output_pdf}[/cyan] ({len(out_bytes)/1024:.1f} KB)")
 
 
@@ -520,13 +526,15 @@ def install_service():
         plist_dir = Path.home() / "Library" / "LaunchAgents"
         plist_dir.mkdir(parents=True, exist_ok=True)
         plist_path = plist_dir / "com.quaderno.companion.plist"
-
+        working_dir = Path.cwd().resolve()
         plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.quaderno.companion</string>
+    <key>WorkingDirectory</key>
+    <string>{working_dir}</string>
     <key>ProgramArguments</key>
     <array>
         <string>{python_bin}</string>
@@ -546,6 +554,7 @@ def install_service():
 </plist>
 """
         plist_path.write_text(plist_content)
+        subprocess.run(["launchctl", "unload", str(plist_path)], check=False, stderr=subprocess.DEVNULL)
         subprocess.run(["launchctl", "load", "-w", str(plist_path)], check=False)
         rprint(f"[bold green]✓[/bold green] Installed background service to [cyan]{plist_path}[/cyan]")
         rprint("[green]The Quaderno Companion menu bar app is now running in the background and will start on login.[/green]")

@@ -916,7 +916,7 @@ class QuadernoMenubarApp(AppBase):
 
     def choose_and_push_file(self, _):
         """Open native macOS file dialog to pick and push/summarize a local document."""
-        script = 'POSIX path of (choose file of type {"pdf", "md", "txt", "html"} with prompt "Choose Document for Quaderno")'
+        script = 'POSIX path of (choose file of type {"pdf", "epub", "mobi", "md", "txt", "html"} with prompt "Choose Document for Quaderno")'
         try:
             out = subprocess.check_output(["osascript", "-e", script], text=True).strip()
             if out:

@@ -250,6 +250,42 @@ def test_agent_push_summarize_with_pages():
         )
 
 
+def test_open_document_epub_upload():
+    """Verify multipart file upload of an EPUB to /api/documents/open converts to PDF and opens."""
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", """<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>""")
+        z.writestr("content.opf", """<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookID" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Uploaded Novel</dc:title></metadata>
+  <manifest><item id="ch1" href="ch1.html" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>""")
+        z.writestr("ch1.html", "<html><body><p>Hello uploaded EPUB</p></body></html>")
+    epub_bytes = buf.getvalue()
+
+    with patch("quaderno_companion.server.device_manager.open_document", new_callable=AsyncMock) as mock_open:
+        mock_open.return_value = {"document_id": "test-doc-123", "page": 1, "total_pages": 1}
+
+        files = {"file": ("uploaded_novel.epub", epub_bytes, "application/epub+zip")}
+        res = client.post("/api/documents/open", files=files)
+
+        assert res.status_code == 200
+        assert res.json()["status"] == "success"
+        mock_open.assert_called_once()
+        call_kwargs = mock_open.call_args.kwargs
+        assert call_kwargs["filename"] == "Uploaded Novel.pdf"
+        assert len(call_kwargs["pdf_bytes"]) > 0
+
+
+
 
 
 
