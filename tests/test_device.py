@@ -437,3 +437,34 @@ def test_extract_pdf_toc():
     assert toc_out[1] == ("Chapter 2: Methods", 2)
     assert toc_out[2] == ("Subsection 2.1", 3)
 
+
+def test_list_folders_and_get_available_folders(tmp_path):
+    """Verify listing folders from client and manager."""
+    import asyncio
+    from quaderno_companion.device.client import QuadernoClient
+    from quaderno_companion.device.manager import QuadernoDeviceManager
+
+    client = QuadernoClient(host="127.0.0.1")
+    with patch.object(client, "list_all_documents") as mock_all:
+        mock_all.return_value = [
+            {"entry_id": "r", "entry_path": "Document", "entry_type": "folder"},
+            {"entry_id": "f1", "entry_path": "Document/Work", "entry_type": "folder"},
+            {"entry_id": "f2", "entry_path": "Document/Books", "entry_type": "folder"},
+            {"entry_id": "d1", "entry_path": "Document/file.pdf", "entry_type": "document"},
+        ]
+        folders = client.list_folders_sync()
+        assert "Document" in folders
+        assert "Document/Work" in folders
+        assert "Document/Books" in folders
+
+    mgr = QuadernoDeviceManager()
+    with patch.object(mgr, "get_client") as mock_get_client:
+        mock_cli = MagicMock()
+        mock_cli.has_credentials = True
+        mock_cli.list_folders_sync.return_value = ["Document", "Document/Work"]
+        mock_get_client.return_value = mock_cli
+
+        available = asyncio.run(mgr.get_available_folders())
+        assert "Document" in available
+        assert "Document/Work" in available
+

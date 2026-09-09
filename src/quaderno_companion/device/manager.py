@@ -266,6 +266,33 @@ class QuadernoDeviceManager:
         """Get or initialize active Quaderno client using the best network route."""
         return await asyncio.to_thread(self.get_client_sync, force_refresh)
 
+    async def get_available_folders(self) -> List[str]:
+        """Fetch all available folder paths from the Quaderno device or local mirror."""
+        folders = set()
+        try:
+            client = await self.get_client()
+            if client and client.has_credentials:
+                remote_folders = await asyncio.to_thread(client.list_folders_sync)
+                folders.update(remote_folders)
+        except Exception as e:
+            logger.debug(f"Could not query remote folders: {e}")
+
+        # Supplement with local mirror folders if present
+        if settings.sync_dir.exists():
+            for root, dirs, _ in os.walk(settings.sync_dir):
+                rel = os.path.relpath(root, settings.sync_dir).replace("\\", "/")
+                if rel and rel != ".":
+                    clean_rel = rel.strip("/")
+                    if not clean_rel.lower().startswith("document"):
+                        clean_rel = f"Document/{clean_rel}"
+                    folders.add(clean_rel)
+
+        if not folders:
+            folders.add("Document")
+            folders.add("Document/Companion")
+
+        return sorted(list(folders))
+
     async def open_document(
         self,
         pdf_bytes: bytes,
@@ -283,11 +310,17 @@ class QuadernoDeviceManager:
             page: Initial page to display (1-indexed).
             remote_folder: Target directory on device.
         """
-        folder = remote_folder or settings.remote_companion_folder
-        doc_title = title or filename
-        remote_path = f"{folder.strip('/')}/{filename.lstrip('/')}"
+        raw_folder = remote_folder or settings.remote_companion_folder
+        fldr = raw_folder.strip("/")
+        if not fldr or fldr.lower() == "document":
+            folder = "Document"
+        elif not fldr.lower().startswith("document/"):
+            folder = f"Document/{fldr}"
+        else:
+            folder = fldr
 
-        # Inspect local page count and Table of Contents
+        doc_title = title or filename
+        remote_path = f"{folder}/{filename.lstrip('/')}"
         total_pages = 1
         raw_toc = []
         try:

@@ -121,6 +121,7 @@ def test_menubar_execute_push_or_summarize_routing():
     # Case 3: summary_pages = 0 -> calls tool_push_document (direct push)
     app.summary_pages = 0
     with patch("quaderno_companion.triggers.menubar.tool_push_document", new_callable=AsyncMock) as mock_push, \
+         patch("quaderno_companion.triggers.menubar.prompt_folder_dialog", return_value="Document/Companion") as mock_prompt, \
          patch("quaderno_companion.triggers.menubar.notify") as mock_notify:
         mock_push.return_value = {"status": "success", "message": "Pushed document"}
 
@@ -128,7 +129,12 @@ def test_menubar_execute_push_or_summarize_routing():
         if fut is not None:
             fut.result(timeout=5.0)
 
-        mock_push.assert_called_once_with(source_url_or_path="https://example.com/test", title="Test Page", page=2)
+        mock_push.assert_called_once_with(
+            source_url_or_path="https://example.com/test",
+            title="Test Page",
+            page=2,
+            destination_folder="Document/Companion",
+        )
 
 
 def test_menubar_instant_page_navigation():
@@ -250,6 +256,49 @@ def test_menubar_chapters_menu_landmark_fallback():
         assert any("Start of Document" in t for t in item_titles)
         assert any("50% (Halfway)" in t for t in item_titles)
         assert any("End of Document" in t for t in item_titles)
+
+
+def test_prompt_folder_dialog(tmp_path):
+    """Verify prompt_folder_dialog resolves mirror subfolders to remote paths."""
+    from unittest.mock import MagicMock
+    from quaderno_companion.triggers.preview import prompt_folder_dialog
+
+    mirror = tmp_path / "Quaderno"
+    mirror.mkdir()
+    sub = mirror / "Research" / "AI"
+    sub.mkdir(parents=True)
+
+    # 1. Subfolder selected
+    mock_run_sub = MagicMock(return_value=MagicMock(returncode=0, stdout=str(sub) + "\n"))
+    with patch("subprocess.run", mock_run_sub), patch("sys.platform", "darwin"):
+        res = prompt_folder_dialog(root_mirror=mirror)
+        assert res == "Document/Research/AI"
+
+    # 2. Root mirror selected
+    mock_run_root = MagicMock(return_value=MagicMock(returncode=0, stdout=str(mirror) + "\n"))
+    with patch("subprocess.run", mock_run_root), patch("sys.platform", "darwin"):
+        res = prompt_folder_dialog(root_mirror=mirror)
+        assert res == "Document"
+
+    # 3. User cancelled
+    mock_run_cancel = MagicMock(return_value=MagicMock(returncode=1, stdout=""))
+    with patch("subprocess.run", mock_run_cancel), patch("sys.platform", "darwin"):
+        res = prompt_folder_dialog(root_mirror=mirror)
+        assert res is None
+
+    # 4. Outside root mirror selected -> gives error alert and returns None
+    outside_dir = tmp_path / "OtherFolder"
+    outside_dir.mkdir()
+    mock_run_outside = MagicMock(return_value=MagicMock(returncode=0, stdout=str(outside_dir) + "\n"))
+    with patch("subprocess.run", mock_run_outside), \
+         patch("sys.platform", "darwin"), \
+         patch("quaderno_companion.triggers.preview.show_alert") as mock_alert:
+        res = prompt_folder_dialog(root_mirror=mirror)
+        assert res is None
+        mock_alert.assert_called_once()
+        args, _ = mock_alert.call_args
+        assert "Invalid Destination" in args[0]
+        assert "outside the Quaderno mirror" in args[1]
 
 
 

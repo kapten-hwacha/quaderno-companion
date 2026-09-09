@@ -619,9 +619,35 @@ class QuadernoClient:
         return True
 
     def list_all_documents(self) -> List[Dict[str, Any]]:
-        """List all documents on Quaderno (synchronous/thread-safe with auto re-auth)."""
+        """List all documents and folders across the Quaderno filesystem (synchronous/thread-safe with auto re-auth)."""
         dp = self._ensure_dp_instance()
-        return self._run_sync_with_reauth(lambda: dp.list_documents() or [])
+
+        def _fetch():
+            if hasattr(dp, "list_all"):
+                try:
+                    entries = dp.list_all()
+                    if entries:
+                        return entries
+                except Exception as e:
+                    logger.debug(f"dp.list_all() failed, falling back: {e}")
+            if hasattr(dp, "list_documents"):
+                return dp.list_documents() or []
+            return []
+
+        return self._run_sync_with_reauth(_fetch)
+
+    def list_folders_sync(self) -> List[str]:
+        """List all remote folder paths on Quaderno storage."""
+        entries = self.list_all_documents()
+        folders = set()
+        for e in entries:
+            if e.get("entry_type") == "folder":
+                p = (e.get("entry_path") or "").strip("/")
+                if p:
+                    folders.add(p)
+        if "Document" not in folders:
+            folders.add("Document")
+        return sorted(list(folders))
 
     def upload_document_sync(
         self,

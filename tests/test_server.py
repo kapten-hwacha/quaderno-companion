@@ -285,6 +285,41 @@ def test_open_document_epub_upload():
         assert len(call_kwargs["pdf_bytes"]) > 0
 
 
+def test_list_fs_folders_endpoint():
+    """Verify GET /api/fs/folders endpoint returns available folders."""
+    with patch("quaderno_companion.server.device_manager.get_available_folders", new_callable=AsyncMock) as mock_folders:
+        mock_folders.return_value = ["Document", "Document/Companion", "Document/Research"]
+        res = client.get("/api/fs/folders")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert "Document/Research" in data["folders"]
+
+        res_v1 = client.get("/api/v1/fs/folders")
+        assert res_v1.status_code == 200
+
+
+def test_open_document_with_destination_folder():
+    """Verify POST /api/documents/open respects custom destination folder."""
+    with patch("quaderno_companion.server.tool_push_document", new_callable=AsyncMock) as mock_push:
+        mock_push.return_value = {"status": "success", "message": "Opened document"}
+        res = client.post(
+            "/api/documents/open",
+            json={
+                "url_or_path": "https://example.com/test.pdf",
+                "folder": "Document/Research",
+            },
+        )
+        assert res.status_code == 200
+        mock_push.assert_called_once_with(
+            source_url_or_path="https://example.com/test.pdf",
+            title=None,
+            page=1,
+            profile=None,
+            destination_folder="Document/Research",
+        )
+
+
 
 
 

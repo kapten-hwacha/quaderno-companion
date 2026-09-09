@@ -60,6 +60,7 @@ from quaderno_companion.triggers.preview import (
     get_preview_document_info,
     notify,
     prompt_delete_previous_dialog,
+    prompt_folder_dialog,
     prompt_text_dialog,
     show_alert,
 )
@@ -839,10 +840,32 @@ class QuadernoMenubarApp(AppBase):
 
         return bg_worker.submit(_fetch_coro())
 
-    def _execute_push_or_summarize(self, target: str, title: Optional[str] = None, page: int = 1):
+    def _execute_push_or_summarize(
+        self,
+        target: str,
+        title: Optional[str] = None,
+        page: int = 1,
+        destination_folder: Optional[str] = None,
+    ):
         """Execute push or summarize based on summary_pages slider and summarizer_provider settings."""
         pages = self.summary_pages
         is_summary = pages > 0
+
+        target_dest = destination_folder
+        if not is_summary and target_dest is None:
+            # Prompt user with native macOS Folder Browser dialog rooted at mirror
+            last_used = getattr(self, "_last_dest_folder", None) or settings.remote_companion_folder
+            resp = prompt_folder_dialog(
+                title="Select Destination Folder on Quaderno",
+                initial_folder=last_used,
+                root_mirror=settings.sync_dir,
+            )
+            if resp is None:
+                # User cancelled dialog
+                return None
+            target_dest = resp.strip() or "Document"
+            self._last_dest_folder = target_dest
+
         provider = self.summarizer_provider
         prov_label = "API" if provider == "gemini_api" else "NotebookLM"
         action_verb = f"Summarizing ({pages} pg{'s' if pages > 1 else ''} via {prov_label})..." if is_summary else "Ingesting..."
@@ -861,7 +884,12 @@ class QuadernoMenubarApp(AppBase):
                         provider=provider,
                     )
                 else:
-                    res = await tool_push_document(source_url_or_path=target, title=title, page=page)
+                    res = await tool_push_document(
+                        source_url_or_path=target,
+                        title=title,
+                        page=page,
+                        destination_folder=target_dest,
+                    )
 
                 notify("Quaderno Companion", success_title, res.get("message", "Sent to device."))
                 self.refresh_telemetry()

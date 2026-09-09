@@ -179,9 +179,79 @@ def setup_cmd():
 
 
 
+def _resolve_destination_folder(
+    explicit_dest: Optional[str],
+    default_folder: Optional[str] = None,
+) -> str:
+    """Resolve destination folder, prompting interactively if not explicitly provided."""
+    from rich.prompt import Prompt
+    from quaderno_companion.fs.syncer import syncer
+
+    if explicit_dest and explicit_dest.strip():
+        fldr = explicit_dest.strip().replace("\\", "/").strip("/")
+        if not fldr or fldr.lower() == "document":
+            return "Document"
+        if not fldr.lower().startswith("document/"):
+            return f"Document/{fldr}"
+        return fldr
+
+    default = (default_folder or settings.remote_companion_folder).replace("\\", "/").strip("/")
+    if not default.lower().startswith("document"):
+        default = f"Document/{default}" if default else "Document"
+
+    # Only prompt if stdin is an interactive terminal
+    if not sys.stdin.isatty():
+        return default
+
+    # Gather available folders
+    known = syncer.get_known_folders()
+    if default not in known:
+        known.insert(0, default)
+    if "Document" not in known:
+        known.insert(0, "Document")
+
+    rprint("\n[bold cyan]Destination Location on Quaderno:[/bold cyan]")
+    for idx, folder in enumerate(known, 1):
+        is_def = " [green](default)[/green]" if folder == default else ""
+        rprint(f"  [bold yellow][{idx}][/bold yellow] {folder}{is_def}")
+    rprint(f"  [bold yellow][0][/bold yellow] [italic]Enter custom folder path...[/italic]")
+
+    try:
+        def_idx = str(known.index(default) + 1)
+    except ValueError:
+        def_idx = "1"
+
+    choice = Prompt.ask(
+        "\nSelect destination folder (number or custom path)",
+        default=def_idx,
+    ).strip()
+
+    if choice.isdigit():
+        num = int(choice)
+        if 1 <= num <= len(known):
+            selected = known[num - 1]
+        elif num == 0:
+            custom = Prompt.ask("Enter custom destination folder", default="Document").strip()
+            selected = custom or "Document"
+        else:
+            selected = default
+    elif choice:
+        selected = choice
+    else:
+        selected = default
+
+    clean = selected.replace("\\", "/").strip("/")
+    if not clean or clean.lower() == "document":
+        return "Document"
+    if not clean.lower().startswith("document/"):
+        return f"Document/{clean}"
+    return clean
+
+
 @app.command()
 def push(
     source: Optional[str] = typer.Argument(None, help="URL, ArXiv paper, or file path (auto-detects active browser tab if omitted)"),
+    dest: Optional[str] = typer.Option(None, "--dest", "-d", "--folder", help="Destination folder on Quaderno (e.g. 'Document/Research')"),
     title: Optional[str] = typer.Option(None, "--title", "-t", help="Custom document title"),
     page: int = typer.Option(1, "--page", "-p", help="Initial page number"),
     profile: Optional[str] = typer.Option(None, "--profile", help="Target screen ('A4' or 'A5')"),
@@ -207,6 +277,7 @@ def push(
             rprint("[yellow]Usage: quadctl push [URL_OR_FILE][/yellow]")
             sys.exit(1)
 
+    target_dest = _resolve_destination_folder(dest)
     prev_doc = get_last_pushed_document()
     should_delete_prev = _resolve_prev_doc_deletion(prev_doc, clean, keep)
 
@@ -218,8 +289,9 @@ def push(
                     title=target_title,
                     page=page,
                     profile=profile,
+                    destination_folder=target_dest,
                 )
-                rprint(f"[bold green]✓[/bold green] {res['message']}")
+                rprint(f"[bold green]✓[/bold green] {res['message']} in [bold cyan]{target_dest}[/bold cyan]")
                 if should_delete_prev:
                     await _delete_prev_doc(prev_doc)
             except Exception as e:
@@ -231,6 +303,7 @@ def push(
 
 @app.command()
 def window(
+    dest: Optional[str] = typer.Option(None, "--dest", "-d", "--folder", help="Destination folder on Quaderno (e.g. 'Document/Screenshots')"),
     profile: Optional[str] = typer.Option(None, "--profile", help="Target screen ('A4' or 'A5')"),
     rotate: bool = typer.Option(True, "--rotate/--no-rotate", help="Auto-rotate landscape window 90° for full-screen portrait reading"),
     clean: bool = typer.Option(False, "--clean", "-c", help="Automatically delete previously pushed document without asking"),
@@ -240,6 +313,7 @@ def window(
     from quaderno_companion.triggers.window import capture_active_window_pdf
     from quaderno_companion.state import get_last_pushed_document
 
+    target_dest = _resolve_destination_folder(dest)
     prev_doc = get_last_pushed_document()
     should_delete_prev = _resolve_prev_doc_deletion(prev_doc, clean, keep)
 
@@ -252,8 +326,9 @@ def window(
                     title=doc_title,
                     page=1,
                     profile=profile,
+                    destination_folder=target_dest,
                 )
-                rprint(f"[bold green]✓[/bold green] Captured and pushed '[white]{doc_title}[/white]' to Quaderno.")
+                rprint(f"[bold green]✓[/bold green] Captured and pushed '[white]{doc_title}[/white]' to Quaderno ({target_dest}).")
 
                 if should_delete_prev:
                     await _delete_prev_doc(prev_doc)
@@ -266,6 +341,7 @@ def window(
 
 @app.command()
 def preview(
+    dest: Optional[str] = typer.Option(None, "--dest", "-d", "--folder", help="Destination folder on Quaderno"),
     page: Optional[int] = typer.Option(None, "--page", "-p", help="Page number to open (auto-detected if omitted)"),
     summarize: bool = typer.Option(False, "--summarize", "-s", help="Summarize the Preview document into a 1-page E-ink brief"),
     watch: bool = typer.Option(False, "--watch", "-w", help="Continuous live mirror: automatically turns Quaderno page when you navigate in Preview"),
@@ -279,6 +355,7 @@ def preview(
         rprint("[bold red]No active document found in Apple Preview.[/bold red] Please open a PDF in Preview first.")
         sys.exit(1)
 
+    target_dest = _resolve_destination_folder(dest)
     target_page = page if page is not None else detected_page
 
     async def _do_preview():
@@ -294,8 +371,9 @@ def preview(
                         title=Path(doc_path).stem,
                         page=target_page,
                         profile=profile,
+                        destination_folder=target_dest,
                     )
-                rprint(f"[bold green]✓[/bold green] {res['message']}")
+                rprint(f"[bold green]✓[/bold green] {res['message']} in [bold cyan]{target_dest}[/bold cyan]")
             except Exception as e:
                 rprint(f"[bold red]Failed:[/bold red] {e}")
                 sys.exit(1)

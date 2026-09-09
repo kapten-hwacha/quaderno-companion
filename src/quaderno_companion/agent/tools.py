@@ -86,6 +86,10 @@ class PushDocumentParams(BaseModel):
         default=None,
         description="Target screen profile ('A4' or 'A5'). Defaults to settings.",
     )
+    destination_folder: Optional[str] = Field(
+        default=None,
+        description="Target destination folder on Quaderno storage (e.g. 'Document/Research').",
+    )
 
 
 class NavigateReaderParams(BaseModel):
@@ -102,21 +106,21 @@ class NavigateReaderParams(BaseModel):
 class SummarizeToEinkParams(BaseModel):
     text_or_url: str = Field(
         ...,
-        description="Text content, markdown, or URL to summarize.",
+        description="Text content, web URL, or local file path to summarize.",
     )
     title: Optional[str] = Field(
         default=None,
-        description="Title of the executive summary.",
+        description="Document title for the generated summary brief.",
     )
     key_takeaways: Optional[List[str]] = Field(
         default=None,
-        description="Pre-computed bullet-point takeaways (3–5 items). If omitted, rule-based extraction is used.",
+        description="Optional list of executive takeaway bullet points.",
     )
     sections: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Dict mapping section heading → body text. If omitted, a single Overview section is generated.",
+        description="Structured sections for multi-topic synthesis.",
     )
-    pages: Optional[int] = Field(
+    pages: int = Field(
         default=1,
         description="Target page length of the summary (1–5 pages).",
     )
@@ -129,6 +133,7 @@ async def tool_push_document(
     title: Optional[str] = None,
     page: int = 1,
     profile: Optional[str] = None,
+    destination_folder: Optional[str] = None,
 ) -> PushDocumentResult:
     """Downloads, optimizes, uploads, and switches the Quaderno screen to the document."""
     target_profile = profile or settings.default_profile
@@ -145,6 +150,7 @@ async def tool_push_document(
         filename=doc.filename,
         title=doc.title,
         page=page,
+        remote_folder=destination_folder,
     )
 
     from quaderno_companion.state import record_pushed_document

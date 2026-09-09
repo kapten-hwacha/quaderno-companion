@@ -157,6 +157,7 @@ class OpenDocumentRequest(BaseModel):
     title: Optional[str] = Field(None, description="Document display title.")
     page: int = Field(1, description="Page number to open (1-indexed).")
     profile: Optional[str] = Field(None, description="Target profile ('A4' or 'A5').")
+    folder: Optional[str] = Field(None, description="Target destination folder on Quaderno storage.")
 
 
 class PageNavigationRequest(BaseModel):
@@ -233,8 +234,30 @@ async def get_viewer_status():
         raise HTTPException(status_code=500, detail="Failed to fetch viewer status.")
 
 
+@app.get(
+    "/api/fs/folders",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+@app.get(
+    "/api/v1/fs/folders",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def list_fs_folders():
+    """List all known folder paths on the Quaderno device and local mirror."""
+    try:
+        folders = await device_manager.get_available_folders()
+        return {"status": "success", "folders": folders}
+    except Exception as e:
+        logger.error(f"Error fetching folders: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list filesystem folders.")
+
+
 @app.post(
     "/api/documents/open",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+@app.post(
+    "/api/v1/open",
     dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
 )
 async def open_document(
@@ -243,10 +266,12 @@ async def open_document(
     file: Optional[UploadFile] = File(None),
     title: Optional[str] = Form(None),
     page: int = Form(1),
+    folder: Optional[str] = Form(None),
 ):
     """Pushes PDF blob or local path/URL and opens it on Quaderno."""
     try:
         content_type = request.headers.get("content-type", "").lower()
+        dest_folder = folder
 
         # Case 1: JSON payload
         if "application/json" in content_type:
@@ -258,8 +283,12 @@ async def open_document(
                     title=payload.title,
                     page=payload.page,
                     profile=payload.profile,
+                    destination_folder=payload.folder,
                 )
                 return result
+
+        if payload and payload.folder:
+            dest_folder = payload.folder
 
         # Case 2: Direct multipart file upload
         if file is not None:
@@ -300,6 +329,7 @@ async def open_document(
                 filename=f"{doc_title}.pdf",
                 title=doc_title,
                 page=page,
+                remote_folder=dest_folder,
             )
             return {"status": "success", "result": result}
 
@@ -310,6 +340,7 @@ async def open_document(
                 title=payload.title,
                 page=payload.page,
                 profile=payload.profile,
+                destination_folder=dest_folder,
             )
             return result
 

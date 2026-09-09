@@ -127,3 +127,54 @@ def test_syncer_runner_lifecycle(tmp_path):
     runner.stop()
     assert runner.is_running is False
 
+
+def test_syncer_folder_deletion_propagation(tmp_path, mock_quaderno_client):
+    """Verify deleting a local folder propagates deletion to Quaderno."""
+    sync_dir = tmp_path / "sync_folder"
+    state_file = tmp_path / "state.json"
+
+    syncer = QuadernoSyncer(sync_dir=sync_dir, state_path=state_file)
+    # First sync pass pulls files and folders
+    syncer.sync_pass(client=mock_quaderno_client)
+    companion_dir = sync_dir / "Companion"
+    assert companion_dir.exists()
+
+    # Delete local file and folder
+    (companion_dir / "quick_note.pdf").unlink()
+    companion_dir.rmdir()
+
+    res = syncer.sync_pass(client=mock_quaderno_client)
+    assert "Companion/quick_note.pdf" in res.deleted
+    mock_quaderno_client.delete_folder_sync.assert_called_with("Document/Companion")
+
+
+def test_syncer_timestamp_preservation(tmp_path, mock_quaderno_client):
+    """Verify file modification timestamp is preserved upon download."""
+    sync_dir = tmp_path / "sync_folder"
+    state_file = tmp_path / "state.json"
+
+    syncer = QuadernoSyncer(sync_dir=sync_dir, state_path=state_file)
+    syncer.sync_pass(client=mock_quaderno_client)
+
+    file_path = sync_dir / "control_systems.pdf"
+    assert file_path.exists()
+    # 2026-08-16T10:00:00Z timestamp
+    from datetime import datetime
+    expected_ts = datetime.fromisoformat("2026-08-16T10:00:00+00:00").timestamp()
+    assert abs(file_path.stat().st_mtime - expected_ts) < 2.0
+
+
+def test_syncer_get_known_folders(tmp_path, mock_quaderno_client):
+    """Verify get_known_folders aggregates folders from client and local mirror."""
+    sync_dir = tmp_path / "sync_folder"
+    state_file = tmp_path / "state.json"
+    (sync_dir / "Research").mkdir(parents=True, exist_ok=True)
+
+    syncer = QuadernoSyncer(sync_dir=sync_dir, state_path=state_file)
+    mock_quaderno_client.list_folders_sync.return_value = ["Document", "Document/Notes"]
+
+    folders = syncer.get_known_folders(client=mock_quaderno_client)
+    assert "Document" in folders
+    assert "Document/Notes" in folders
+    assert "Document/Research" in folders
+

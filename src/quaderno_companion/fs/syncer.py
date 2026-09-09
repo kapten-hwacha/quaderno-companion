@@ -41,23 +41,39 @@ class SyncResult:
 
 
 def _norm_remote_path(p: Optional[str]) -> str:
-    """Normalize Quaderno remote path (removes leading Document/ prefix)."""
-    p = (p or "").strip("/")
-    if p.lower() == "document":
+    """Normalize Quaderno remote path to relative path in local mirror (mapping Document/ to root)."""
+    p = (p or "").replace("\\", "/").strip("/")
+    if not p or p.lower() == "document":
         return ""
     if p.lower().startswith("document/"):
-        return p[9:]
+        return p[9:].strip("/")
     return p
 
 
 def _to_remote_folder(rel_folder: str) -> str:
-    """Convert relative folder path to Quaderno remote folder path (prepends Document/)."""
-    rel_folder = rel_folder.strip("/")
-    if not rel_folder:
+    """Convert relative local folder path to Quaderno remote folder path (prepending Document/)."""
+    rel_folder = rel_folder.replace("\\", "/").strip("/")
+    if not rel_folder or rel_folder.lower() == "document":
         return "Document"
     if rel_folder.lower().startswith("document/"):
         return rel_folder
     return f"Document/{rel_folder}"
+
+
+def _set_file_mtime(path: Path, mtime_str_or_ts: Any) -> None:
+    """Set local file modification time to match remote timestamp."""
+    try:
+        if isinstance(mtime_str_or_ts, (int, float)):
+            ts = float(mtime_str_or_ts)
+        elif isinstance(mtime_str_or_ts, str) and mtime_str_or_ts:
+            clean_str = mtime_str_or_ts.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean_str)
+            ts = dt.timestamp()
+        else:
+            return
+        os.utime(path, (ts, ts))
+    except Exception as e:
+        logger.debug(f"Could not set utime on {path}: {e}")
 
 
 def _compute_file_sha256(path: Path) -> str:
@@ -69,20 +85,25 @@ def _compute_file_sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _download_remote_to_file(client: Any, doc_id: str, dest_path: Path) -> None:
+def _download_remote_to_file(client: Any, doc_id: str, dest_path: Path, mtime: Optional[Any] = None) -> None:
     """Download remote document to disk using streaming if available, with in-memory fallback."""
     dest_path.parent.mkdir(parents=True, exist_ok=True)
+    downloaded = False
     if hasattr(client, "download_document_to_file"):
         try:
             client.download_document_to_file(doc_id, dest_path)
             if dest_path.exists() and dest_path.stat().st_size > 0:
-                return
+                downloaded = True
         except Exception:
             pass
-    data = client.download_document(doc_id)
-    if isinstance(data, (bytes, bytearray)):
-        with open(dest_path, "wb") as f:
-            f.write(data)
+    if not downloaded:
+        data = client.download_document(doc_id)
+        if isinstance(data, (bytes, bytearray)):
+            with open(dest_path, "wb") as f:
+                f.write(data)
+            downloaded = True
+    if downloaded and mtime is not None:
+        _set_file_mtime(dest_path, mtime)
 
 
 class QuadernoSyncer:
@@ -192,8 +213,29 @@ class QuadernoSyncer:
                 local_files[rel_file] = Path(root) / f
 
         # 3. Synchronize Folders First
-        # 3a. Create missing local folders matching remote structure
-        for r_folder in remote_folders:
+        prev_folders = set(state.get("_folders", []))
+
+        # 3a. Propagate folder deletions (if folder removed locally and was previously synced)
+        for tracked_folder in list(prev_folders):
+            if tracked_folder not in local_folders:
+                has_files = any(lf == tracked_folder or lf.startswith(f"{tracked_folder}/") for lf in local_files)
+                if not has_files and (tracked_folder in remote_folders or _to_remote_folder(tracked_folder) in remote_folders):
+                    r_f = _to_remote_folder(tracked_folder)
+                    try:
+                        if hasattr(client, "delete_folder_sync"):
+                            client.delete_folder_sync(r_f)
+                            logger.info(f"Propagated local folder deletion to Quaderno: {r_f}")
+                            remote_folders.pop(tracked_folder, None)
+                            remote_folders.pop(r_f, None)
+                    except Exception as e:
+                        logger.debug(f"Could not delete remote folder '{r_f}': {e}")
+
+        # 3b. Create missing local folders matching remote structure (if not deleted locally)
+        for r_folder in sorted(remote_folders.keys()):
+            if not r_folder:
+                continue
+            if r_folder in prev_folders and r_folder not in local_folders:
+                continue
             local_target = self.sync_dir / r_folder
             if not local_target.exists():
                 try:
@@ -203,16 +245,17 @@ class QuadernoSyncer:
                     logger.error(err)
                     result.errors.append(err)
 
-        # 3b. Create missing remote folders matching local subdirectories
+        # 3c. Create missing remote folders matching local subdirectories
         for l_folder in sorted(local_folders):
-            if l_folder not in remote_folders:
+            r_folder = _to_remote_folder(l_folder)
+            if r_folder not in remote_folders and l_folder not in remote_folders:
                 try:
-                    r_folder = _to_remote_folder(l_folder)
                     client.create_folder_sync(r_folder)
                     remote_folders[l_folder] = {"entry_path": r_folder, "entry_type": "folder"}
+                    remote_folders[r_folder] = {"entry_path": r_folder, "entry_type": "folder"}
                     logger.info(f"Created remote Quaderno folder: {r_folder}")
                 except Exception as e:
-                    err = f"Failed to create remote folder '{l_folder}': {e}"
+                    err = f"Failed to create remote folder '{r_folder}': {e}"
                     logger.error(err)
                     result.errors.append(err)
 
@@ -245,7 +288,7 @@ class QuadernoSyncer:
 
                 # Download new remote document
                 try:
-                    _download_remote_to_file(client, doc_id, local_path)
+                    _download_remote_to_file(client, doc_id, local_path, mtime=r_mtime)
                     result.pulled.append(rel_path)
                     logger.info(f"Pulled document from Quaderno: {rel_path}")
                     
@@ -273,7 +316,7 @@ class QuadernoSyncer:
                 if remote_changed and not local_changed:
                     # Download remote update
                     try:
-                        _download_remote_to_file(client, doc_id, local_path)
+                        _download_remote_to_file(client, doc_id, local_path, mtime=r_mtime)
                         result.pulled.append(rel_path)
                         logger.info(f"Pulled updated document from Quaderno: {rel_path}")
                         state[rel_path] = {
@@ -316,7 +359,7 @@ class QuadernoSyncer:
                         conflict_rel = f"{stem} (Quaderno Conflict {ts}){ext}"
                         conflict_local = self.sync_dir / conflict_rel
                         
-                        _download_remote_to_file(client, doc_id, conflict_local)
+                        _download_remote_to_file(client, doc_id, conflict_local, mtime=r_mtime)
                         result.pulled.append(conflict_rel)
 
                         r_folder = _to_remote_folder(os.path.dirname(rel_path))
@@ -364,10 +407,10 @@ class QuadernoSyncer:
                 filename = local_path.name
 
                 # Ensure remote folder exists
-                if parent_folder and parent_folder not in remote_folders:
+                if r_folder and r_folder not in remote_folders:
                     try:
                         client.create_folder_sync(r_folder)
-                        remote_folders[parent_folder] = {"entry_path": r_folder, "entry_type": "folder"}
+                        remote_folders[r_folder] = {"entry_path": r_folder, "entry_type": "folder"}
                     except Exception:
                         pass
 
@@ -393,8 +436,37 @@ class QuadernoSyncer:
                 logger.error(err)
                 result.errors.append(err)
 
+        state["_folders"] = sorted(list(set(list(remote_folders.keys()) + list(local_folders))))
         self._save_state(state)
         return result
+
+    def get_known_folders(self, client: Optional[Any] = None) -> List[str]:
+        """Return list of known folder paths on Quaderno / local mirror."""
+        folders = set()
+        if client is not None and hasattr(client, "list_folders_sync"):
+            try:
+                folders.update(client.list_folders_sync())
+            except Exception:
+                pass
+        if self.sync_dir.exists():
+            for root, dirs, _ in os.walk(self.sync_dir):
+                rel = os.path.relpath(root, self.sync_dir).replace("\\", "/")
+                if rel and rel != ".":
+                    clean = rel.strip("/")
+                    if not clean.lower().startswith("document"):
+                        clean = f"Document/{clean}"
+                    folders.add(clean)
+        state = self._load_state()
+        for f in state.get("_folders", []):
+            if f:
+                clean = f.strip("/")
+                if not clean.lower().startswith("document"):
+                    clean = f"Document/{clean}"
+                folders.add(clean)
+        if not folders:
+            folders.add("Document")
+            folders.add("Document/Companion")
+        return sorted(list(folders))
 
 
 class QuadernoSyncRunner:

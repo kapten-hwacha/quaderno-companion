@@ -6,7 +6,8 @@ import json
 import logging
 import re
 import subprocess
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Optional, Tuple, Union
 
 import sys
 
@@ -124,6 +125,114 @@ def prompt_text_dialog(title: str, prompt: str, default_text: str = "") -> Optio
         )
         if res.returncode == 0:
             return res.stdout.strip()
+    except Exception:
+        pass
+
+    return None
+
+
+def prompt_folder_dialog(
+    title: str = "Select Destination Folder on Quaderno",
+    initial_folder: Optional[Union[str, Path]] = None,
+    root_mirror: Optional[Union[str, Path]] = None,
+) -> Optional[str]:
+    """Display a native foreground folder picker dialog rooted at the local mirror.
+
+    Returns the destination folder relative to the Quaderno device root (e.g. 'Document/Research').
+    Returns None if the user cancelled the dialog.
+    """
+    from quaderno_companion.config import settings
+
+    mirror_path = Path(root_mirror or settings.sync_dir).expanduser().resolve()
+    mirror_path.mkdir(parents=True, exist_ok=True)
+
+    default_loc = mirror_path
+    if initial_folder:
+        rel_str = str(initial_folder).replace("\\", "/").strip("/")
+        if rel_str.lower().startswith("document/"):
+            rel_str = rel_str[9:]
+        elif rel_str.lower() == "document":
+            rel_str = ""
+        candidate = (mirror_path / rel_str).resolve()
+        if candidate.is_dir():
+            default_loc = candidate
+
+    # macOS
+    if sys.platform == "darwin":
+        safe_title = _applescript_quote(title, 200)
+        safe_loc = _applescript_quote(str(default_loc), 500)
+
+        script = f"""
+        tell application "System Events"
+            activate
+            set chosen to choose folder with prompt {safe_title} default location (POSIX file {safe_loc})
+            return POSIX path of chosen
+        end tell
+        """
+        try:
+            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            if res.returncode == 0 and res.stdout.strip():
+                chosen_str = res.stdout.strip().rstrip("/")
+                chosen_path = Path(chosen_str).resolve()
+                try:
+                    rel = chosen_path.relative_to(mirror_path)
+                    if str(rel) == ".":
+                        return "Document"
+                    return f"Document/{rel.as_posix()}"
+                except ValueError:
+                    show_alert(
+                        "Invalid Destination Folder",
+                        f"The selected folder is outside the Quaderno mirror root ({mirror_path}).\n\nPlease choose a folder inside '{mirror_path}'.",
+                    )
+                    return None
+        except Exception as e:
+            logger.warning(f"Native folder picker failed: {e}")
+        return None
+
+    # Linux (zenity / kdialog)
+    try:
+        res = subprocess.run(
+            ["zenity", "--file-selection", "--directory", f"--title={title}", f"--filename={default_loc}/"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            chosen_path = Path(res.stdout.strip().rstrip("/")).resolve()
+            try:
+                rel = chosen_path.relative_to(mirror_path)
+                if str(rel) == ".":
+                    return "Document"
+                return f"Document/{rel.as_posix()}"
+            except ValueError:
+                show_alert(
+                    "Invalid Destination Folder",
+                    f"The selected folder is outside the Quaderno mirror root ({mirror_path}).\n\nPlease choose a folder inside '{mirror_path}'.",
+                )
+                return None
+    except Exception:
+        pass
+
+    try:
+        res = subprocess.run(
+            ["kdialog", "--getexistingdirectory", str(default_loc), f"--title={title}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            chosen_path = Path(res.stdout.strip().rstrip("/")).resolve()
+            try:
+                rel = chosen_path.relative_to(mirror_path)
+                if str(rel) == ".":
+                    return "Document"
+                return f"Document/{rel.as_posix()}"
+            except ValueError:
+                show_alert(
+                    "Invalid Destination Folder",
+                    f"The selected folder is outside the Quaderno mirror root ({mirror_path}).\n\nPlease choose a folder inside '{mirror_path}'.",
+                )
+                return None
     except Exception:
         pass
 
