@@ -35,6 +35,8 @@ except Exception:
                 pass
             def add(self, *args: Any, **kwargs: Any) -> None:
                 pass
+            def clear(self) -> None:
+                pass
         class App:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
                 self.menu: Any = []
@@ -522,6 +524,14 @@ class QuadernoMenubarApp(AppBase):
         self._sync_in_progress = False
         self._telemetry_in_progress = False
 
+        self.push_file_item = rumps.MenuItem("📁 Push Local File...", callback=self.choose_and_push_file)
+        self.other_push_menu = rumps.MenuItem("Other Push Options")
+        self.other_push_menu.add(rumps.MenuItem("🌐 Push Active Browser Tab", callback=self.push_browser_tab))
+        self.other_push_menu.add(rumps.MenuItem("🖥️ Push Active Window", callback=self.push_active_window))
+        self.other_push_menu.add(rumps.MenuItem("📋 Push from Clipboard", callback=self.push_clipboard))
+        self.other_push_menu.add(rumps.MenuItem("👁️ Push from Preview", callback=self.push_preview))
+        self.other_push_menu.add(rumps.MenuItem("🔗 Push URL...", callback=self.push_url_dialog))
+
         self.menu = [
             self.doc_item,
             self.page_control_item,
@@ -534,12 +544,8 @@ class QuadernoMenubarApp(AppBase):
             self.sync_now_item,
             self.open_folder_item,
             None,  # Separator
-            rumps.MenuItem("🌐 Push Active Browser Tab", callback=self.push_browser_tab),
-            rumps.MenuItem("🖥️ Push Active Window", callback=self.push_active_window),
-            rumps.MenuItem("📋 Push from Clipboard", callback=self.push_clipboard),
-            rumps.MenuItem("👁️ Push from Preview", callback=self.push_preview),
-            rumps.MenuItem("📁 Push Local File...", callback=self.choose_and_push_file),
-            rumps.MenuItem("🔗 Push URL...", callback=self.push_url_dialog),
+            self.push_file_item,
+            self.other_push_menu,
             None,  # Separator
             self.status_item,
             self.battery_item,

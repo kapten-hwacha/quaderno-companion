@@ -308,4 +308,32 @@ def test_prompt_folder_dialog(tmp_path):
         assert "outside the Quaderno mirror" in args[1]
 
 
+def test_menubar_push_menu_structure():
+    """Verify that 'Push Local File...' is the only visible push item, and other push options are in a submenu."""
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    top_titles = [item.title for item in app.menu.values() if hasattr(item, "title")]
+
+    # Only "📁 Push Local File..." should be visible in the top-level menu
+    assert "📁 Push Local File..." in top_titles
+    assert "Other Push Options" in top_titles
+
+    # Other push options should NOT be in the top-level menu
+    assert "🌐 Push Active Browser Tab" not in top_titles
+    assert "🖥️ Push Active Window" not in top_titles
+    assert "📋 Push from Clipboard" not in top_titles
+    assert "👁️ Push from Preview" not in top_titles
+    assert "🔗 Push URL..." not in top_titles
+
+    # Verify they are present in the submenu
+    sub_titles = [item.title for item in app.other_push_menu.values() if hasattr(item, "title")]
+    assert "🌐 Push Active Browser Tab" in sub_titles
+    assert "🖥️ Push Active Window" in sub_titles
+    assert "📋 Push from Clipboard" in sub_titles
+    assert "👁️ Push from Preview" in sub_titles
+    assert "🔗 Push URL..." in sub_titles
+
+
+
 
