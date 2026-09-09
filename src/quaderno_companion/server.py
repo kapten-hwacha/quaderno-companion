@@ -10,6 +10,7 @@ Exposes REST endpoints for:
 - GET / (Embedded dashboard for device status and control)
 """
 
+import asyncio
 import collections
 from contextlib import asynccontextmanager
 import hmac
@@ -292,30 +293,34 @@ async def open_document(
             ext = Path(fname).suffix.lower()
             doc_title = title or Path(fname).stem or "Uploaded Document"
 
-            if ext in (".epub", ".mobi"):
-                import pymupdf as fitz
-                fmt = ext.lstrip(".")
-                doc = fitz.open(stream=raw_bytes, filetype=fmt)
-                meta_title = (doc.metadata or {}).get("title")
-                if (not title or title == Path(fname).stem) and meta_title and meta_title.strip():
-                    doc_title = meta_title.strip()
-                paper_code = "a5" if "A5" in settings.default_profile else "a4"
-                target_pt_w, target_pt_h = fitz.paper_size(paper_code)
-                if doc.is_reflowable:
-                    if hasattr(doc, "apply_css"):
-                        doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
-                    doc.layout(width=target_pt_w, height=target_pt_h, fontsize=settings.ebook_font_size)
-                raw_bytes = doc.convert_to_pdf()
-                doc.close()
-            elif ext in (".jpg", ".jpeg", ".png", ".webp"):
-                import pymupdf as fitz
-                fmt = ext.lstrip(".")
-                doc = fitz.open(stream=raw_bytes, filetype=fmt)
-                raw_bytes = doc.convert_to_pdf()
-                doc.close()
+            def _convert_and_optimize():
+                nonlocal raw_bytes, doc_title
+                if ext in (".epub", ".mobi"):
+                    import pymupdf as fitz
+                    fmt = ext.lstrip(".")
+                    doc = fitz.open(stream=raw_bytes, filetype=fmt)
+                    meta_title = (doc.metadata or {}).get("title")
+                    if (not title or title == Path(fname).stem) and meta_title and meta_title.strip():
+                        doc_title = meta_title.strip()
+                    paper_code = "a5" if "A5" in settings.default_profile else "a4"
+                    target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+                    if doc.is_reflowable:
+                        if hasattr(doc, "apply_css"):
+                            doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
+                        doc.layout(width=target_pt_w, height=target_pt_h, fontsize=settings.ebook_font_size)
+                    raw_bytes = doc.convert_to_pdf()
+                    doc.close()
+                elif ext in (".jpg", ".jpeg", ".png", ".webp"):
+                    import pymupdf as fitz
+                    fmt = ext.lstrip(".")
+                    doc = fitz.open(stream=raw_bytes, filetype=fmt)
+                    raw_bytes = doc.convert_to_pdf()
+                    doc.close()
 
-            optimizer = EinkOptimizer(profile_name=settings.default_profile)
-            opt_pdf = optimizer.optimize_pdf(raw_bytes, trim_margins=True)
+                optimizer = EinkOptimizer(profile_name=settings.default_profile)
+                return optimizer.optimize_pdf(raw_bytes, trim_margins=True)
+
+            opt_pdf = await asyncio.to_thread(_convert_and_optimize)
 
             result = await device_manager.open_document(
                 pdf_bytes=opt_pdf,
@@ -409,7 +414,7 @@ async def agent_chat(req: AgentChatRequest):
 async def trigger_sync():
     """Triggers an immediate bidirectional sync pass between Quaderno and local folder."""
     try:
-        res = syncer.sync_pass()
+        res = await asyncio.to_thread(syncer.sync_pass)
         return res.to_dict()
     except Exception as e:
         logger.error(f"Sync pass failed: {e}", exc_info=True)

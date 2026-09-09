@@ -318,13 +318,16 @@ class QuadernoSyncer:
                     result.pulled.append(rel_path)
                     logger.info(f"Pulled document from Quaderno: {rel_path}")
                     
-                    loc_mtime = local_path.stat().st_mtime
+                    loc_stat = local_path.stat()
+                    loc_mtime = loc_stat.st_mtime
+                    loc_size = loc_stat.st_size
                     loc_sha = _compute_file_sha256(local_path)
                     state[rel_path] = {
                         "doc_id": doc_id,
                         "remote_mtime": r_mtime,
                         "file_size": r_size,
                         "local_mtime": loc_mtime,
+                        "local_size": loc_size,
                         "local_sha256": loc_sha,
                     }
                 except Exception as e:
@@ -333,8 +336,21 @@ class QuadernoSyncer:
                     result.errors.append(err)
             else:
                 # File exists both locally and remotely
-                loc_mtime = local_path.stat().st_mtime
-                loc_sha = _compute_file_sha256(local_path)
+                st = local_path.stat()
+                loc_mtime = st.st_mtime
+                loc_size = st.st_size
+
+                # Fast-path: If local mtime and local size match cached state, avoid reading entire file for SHA-256
+                cached_local_size = prev_state.get("local_size")
+                if (
+                    prev_state
+                    and loc_mtime == prev_state.get("local_mtime")
+                    and (cached_local_size is None or loc_size == cached_local_size)
+                    and prev_state.get("local_sha256")
+                ):
+                    loc_sha = prev_state.get("local_sha256")
+                else:
+                    loc_sha = _compute_file_sha256(local_path)
 
                 remote_changed = (r_mtime != prev_state.get("remote_mtime")) or (r_size != prev_state.get("file_size"))
                 local_changed = (loc_sha != prev_state.get("local_sha256"))
@@ -345,11 +361,13 @@ class QuadernoSyncer:
                         _download_remote_to_file(client, doc_id, local_path, mtime=r_mtime)
                         result.pulled.append(rel_path)
                         logger.info(f"Pulled updated document from Quaderno: {rel_path}")
+                        loc_stat = local_path.stat()
                         state[rel_path] = {
                             "doc_id": doc_id,
                             "remote_mtime": r_mtime,
                             "file_size": r_size,
-                            "local_mtime": local_path.stat().st_mtime,
+                            "local_mtime": loc_stat.st_mtime,
+                            "local_size": loc_stat.st_size,
                             "local_sha256": _compute_file_sha256(local_path),
                         }
                     except Exception as e:
@@ -365,11 +383,13 @@ class QuadernoSyncer:
                         new_id = client.upload_document_sync(local_path, filename=filename, folder=r_folder)
                         result.pushed.append(rel_path)
                         logger.info(f"Pushed updated document to Quaderno: {rel_path}")
+                        loc_stat = local_path.stat()
                         state[rel_path] = {
                             "doc_id": new_id or doc_id,
                             "remote_mtime": r_mtime,
-                            "file_size": local_path.stat().st_size,
-                            "local_mtime": loc_mtime,
+                            "file_size": loc_stat.st_size,
+                            "local_mtime": loc_stat.st_mtime,
+                            "local_size": loc_stat.st_size,
                             "local_sha256": loc_sha,
                         }
                     except Exception as e:
@@ -398,11 +418,13 @@ class QuadernoSyncer:
                         result.conflicts.append(rel_path)
                         logger.warning(f"Resolved sync conflict for '{rel_path}' by creating conflict copy")
 
+                        loc_stat = local_path.stat()
                         state[rel_path] = {
                             "doc_id": new_id or doc_id,
                             "remote_mtime": r_mtime,
-                            "file_size": local_path.stat().st_size,
-                            "local_mtime": loc_mtime,
+                            "file_size": loc_stat.st_size,
+                            "local_mtime": loc_stat.st_mtime,
+                            "local_size": loc_stat.st_size,
                             "local_sha256": loc_sha,
                         }
                     except Exception as e:
@@ -455,11 +477,13 @@ class QuadernoSyncer:
                 result.pushed.append(rel_path)
                 logger.info(f"Pushed new local file to Quaderno: {rel_path} (ID: {new_id})")
 
+                loc_stat = local_path.stat()
                 state[rel_path] = {
                     "doc_id": new_id,
                     "remote_mtime": datetime.now().isoformat(),
-                    "file_size": local_path.stat().st_size,
-                    "local_mtime": local_path.stat().st_mtime,
+                    "file_size": loc_stat.st_size,
+                    "local_mtime": loc_stat.st_mtime,
+                    "local_size": loc_stat.st_size,
                     "local_sha256": _compute_file_sha256(local_path),
                 }
             except Exception as e:

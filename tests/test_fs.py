@@ -229,3 +229,22 @@ def test_syncer_path_traversal_prevention(tmp_path, mock_quaderno_client):
     assert not (tmp_path / "escaped_dir").exists()
     assert len(res.pulled) == 0
 
+
+def test_syncer_stat_cache_fast_path(tmp_path, mock_quaderno_client):
+    """Verify syncer reuses cached SHA256 when local mtime and size are unchanged."""
+    sync_dir = tmp_path / "sync_folder"
+    state_file = tmp_path / "state.json"
+
+    syncer = QuadernoSyncer(sync_dir=sync_dir, state_path=state_file)
+    # First pass: pulls files and computes initial hashes
+    res1 = syncer.sync_pass(client=mock_quaderno_client)
+    assert len(res1.pulled) == 2
+
+    # Second pass without changes: patch _compute_file_sha256 to ensure it's NOT called
+    with patch("quaderno_companion.fs.syncer._compute_file_sha256") as mock_hash:
+        res2 = syncer.sync_pass(client=mock_quaderno_client)
+        assert len(res2.pulled) == 0
+        assert len(res2.pushed) == 0
+        assert mock_hash.call_count == 0
+
+

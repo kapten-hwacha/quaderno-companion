@@ -288,13 +288,15 @@ class NetworkRouter:
             return None
 
         local_ip, subnet_prefix = subnet_info
+        sem = asyncio.Semaphore(24)
 
         async def probe_ip(ip: str) -> Optional[str]:
             if ip == local_ip:
                 return None
-            if await self._probe_endpoint(ip, settings.device_port, timeout=0.35):
-                if await asyncio.to_thread(self._verify_quaderno_endpoint_sync, ip, settings.device_port):
-                    return ip
+            async with sem:
+                if await self._probe_endpoint(ip, settings.device_port, timeout=0.35):
+                    if await asyncio.to_thread(self._verify_quaderno_endpoint_sync, ip, settings.device_port):
+                        return ip
             return None
 
         tasks = [probe_ip(f"{subnet_prefix}{i}") for i in range(1, 255)]
