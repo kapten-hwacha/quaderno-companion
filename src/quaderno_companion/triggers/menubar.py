@@ -14,7 +14,7 @@ import subprocess
 import threading
 import webbrowser
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, List, Literal, Optional, Tuple
 
 import sys
 import uvicorn
@@ -200,40 +200,11 @@ class QuadernoMenubarApp(AppBase):
         self.battery_item = rumps.MenuItem("Battery: -")
         self.storage_item = rumps.MenuItem("Storage: -")
 
-        # Single-row Page Change Controls in 1st subdivision
-        self.page_control_item = rumps.MenuItem("")
         try:
             if not AppKit or not objc or type(AppKit).__name__ == "_DummyAppKit":
                 raise ImportError("PyObjC / AppKit is unavailable")
 
-            class _NavSegmentHandler(AppKit.NSObject):
-                def initWithApp_(self, app_inst):
-                    self = objc.super(_NavSegmentHandler, self).init()
-                    if self is not None:
-                        self.app = app_inst
-                    return self
-
-                def handleSegment_(self, sender):
-                    idx = sender.selectedSegment()
-                    if idx == 0:
-                        self.app.nav_prev(None)
-                    elif idx == 1:
-                        self.app.nav_next(None)
-
-            self._nav_handler = _NavSegmentHandler.alloc().initWithApp_(self)
-            seg = AppKit.NSSegmentedControl.alloc().initWithFrame_(AppKit.NSMakeRect(18, 4, 190, 24))
-            seg.setSegmentCount_(2)
-            seg.setLabel_forSegment_("◀ Prev", 0)
-            seg.setLabel_forSegment_("Next ▶", 1)
-            seg.setTrackingMode_(AppKit.NSSegmentSwitchTrackingMomentary)
-            seg.setTarget_(self._nav_handler)
-            seg.setAction_(objc.selector(self._nav_handler.handleSegment_, signature=b"v@:@"))
-
-            container = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 225, 30))
-            container.addSubview_(seg)
-            self.page_control_item._menuitem.setView_(container)
-
-            # Native NSSlider Page Scroller / Scrollbar with Live Page Badge
+            # Native NSSlider Page Scroller / Scrollbar with Live Page Badge and Chapter Snapping
             class _PageSliderHandler(AppKit.NSObject):
                 def initWithApp_(self, app_inst):
                     self = objc.super(_PageSliderHandler, self).init()
@@ -245,13 +216,7 @@ class QuadernoMenubarApp(AppBase):
 
                 def handleSlider_(self, sender):
                     import time, threading
-                    target_page = int(round(sender.doubleValue()))
-                    if target_page < 1:
-                        target_page = 1
-
-                    self._pending_page = target_page
-                    self.app._last_user_nav_time = time.time()
-
+                    raw_val = sender.doubleValue()
                     tot = 1
                     title_short = "Document"
                     if hasattr(self.app, "_last_reading_state") and self.app._last_reading_state:
@@ -259,9 +224,27 @@ class QuadernoMenubarApp(AppBase):
                         title_str = self.app._last_reading_state.title or "Document"
                         title_short = title_str[:24] + ("..." if len(title_str) > 24 else "")
 
+                    target_page, chapter_title, is_clipped = self.app._get_clipped_chapter(raw_val, tot)
+
+                    # When clipped to a chapter, magnetically snap the slider knob
+                    if is_clipped:
+                        sender.setDoubleValue_(float(target_page))
+
+                    self._pending_page = target_page
+                    self.app._last_user_nav_time = time.time()
+
                     # Update live page badge immediately at 60fps while dragging
                     if hasattr(self.app, "slider_page_badge") and self.app.slider_page_badge is not None:
                         self.app.slider_page_badge.setStringValue_(f"p. {target_page} / {tot}")
+
+                    # Update chapter title banner immediately
+                    if hasattr(self.app, "slider_chapter_label") and self.app.slider_chapter_label is not None:
+                        if chapter_title:
+                            self.app.slider_chapter_label.setStringValue_(f"📑 {chapter_title}")
+                            self.app.slider_chapter_label.setTextColor_(AppKit.NSColor.labelColor())
+                        else:
+                            self.app.slider_chapter_label.setStringValue_("")
+
                     self.app.doc_item.title = f"📖 {title_short} ({target_page}/{tot})"
 
                     # Cancel pending timer
@@ -291,6 +274,19 @@ class QuadernoMenubarApp(AppBase):
                         self._debounce_timer.start()
 
             self._slider_handler = _PageSliderHandler.alloc().initWithApp_(self)
+
+            # Top Chapter Banner Label
+            self.slider_chapter_label = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(14, 22, 200, 16))
+            self.slider_chapter_label.setStringValue_("")
+            self.slider_chapter_label.setBezeled_(False)
+            self.slider_chapter_label.setDrawsBackground_(False)
+            self.slider_chapter_label.setEditable_(False)
+            self.slider_chapter_label.setSelectable_(False)
+            self.slider_chapter_label.setFont_(AppKit.NSFont.systemFontOfSize_weight_(11.0, AppKit.NSFontWeightMedium))
+            self.slider_chapter_label.setTextColor_(AppKit.NSColor.secondaryLabelColor())
+            self.slider_chapter_label.setAlignment_(AppKit.NSTextAlignmentLeft)
+            if hasattr(self.slider_chapter_label, "cell") and self.slider_chapter_label.cell() is not None:
+                self.slider_chapter_label.cell().setLineBreakMode_(AppKit.NSLineBreakByTruncatingTail)
 
             # Left min page label (1)
             self.slider_min_label = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(14, 2, 14, 16))
@@ -325,7 +321,8 @@ class QuadernoMenubarApp(AppBase):
             self.slider_page_badge.setTextColor_(AppKit.NSColor.secondaryLabelColor())
             self.slider_page_badge.setAlignment_(AppKit.NSTextAlignmentRight)
 
-            slider_container = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 228, 24))
+            slider_container = AppKit.NSView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 228, 40))
+            slider_container.addSubview_(self.slider_chapter_label)
             slider_container.addSubview_(self.slider_min_label)
             slider_container.addSubview_(self.page_slider)
             slider_container.addSubview_(self.slider_page_badge)
@@ -402,16 +399,22 @@ class QuadernoMenubarApp(AppBase):
 
             self.watch_mode_item, self.watch_switch, self._watch_handler_inst = _create_switch_item("🪞 Preview Mirror", "watch")
         except Exception:
-            self.page_control_item = rumps.MenuItem("◀ Prev  |  Next ▶", callback=self.nav_next)
             self.page_slider_item = rumps.MenuItem("")
+            self.slider_chapter_label = None
+            self.slider_min_label = None
+            self.slider_page_badge = None
+            self.page_slider = None
             self.watch_mode_item = rumps.MenuItem("🪞 Preview Mirror", callback=self.toggle_watch_mode)
             self.watch_mode_item.state = False
             self.watch_switch = None
         
-        # Dropdown Submenu to Jump Between Chapters
+        # Chapters tracking list for unified slider clipping
+        self._current_chapters: List[Tuple[str, int]] = []
+        self._last_loaded_toc_sig = None
+
+        # Dropdown Submenu to Jump Between Chapters (maintained for compatibility)
         self.chapters_menu = rumps.MenuItem("📑 Jump to Chapter")
         self.chapters_menu.add(rumps.MenuItem("No active document"))
-        self._last_loaded_toc_sig = None
 
         self.sync_now_item = rumps.MenuItem("🔄 Sync Now", callback=self.trigger_sync_now)
         self.open_folder_item = rumps.MenuItem("📁 Open Quaderno Folder", callback=self.open_quaderno_folder)
@@ -433,20 +436,17 @@ class QuadernoMenubarApp(AppBase):
 
         self.menu = [
             self.doc_item,
-            self.page_control_item,
             self.page_slider_item,
-            self.chapters_menu,
-            None,  # Separator
             self.watch_mode_item,
-            self.sync_now_item,
-            self.open_folder_item,
-            None,  # Separator
+            None,  # Separator (unified scroller handles navigation and chapters)
             self.push_file_item,
+            self.open_folder_item,
             self.other_push_menu,
             None,  # Separator
             self.status_item,
             self.battery_item,
             self.storage_item,
+            self.sync_now_item,
             None,  # Separator
             rumps.MenuItem("Quit Quaderno Companion", callback=self.quit_app),
         ]
@@ -550,10 +550,37 @@ class QuadernoMenubarApp(AppBase):
                 return
             except Exception:
                 pass
-        try:
-            fn()
-        except Exception:
-            pass
+    def _get_clipped_chapter(self, target_val: float, total_pages: int) -> Tuple[int, Optional[str], bool]:
+        """Check if continuous slider target value clips/snaps to any chapter within magnetic snap distance.
+        Returns: (snapped_page, chapter_title_if_clipped, is_clipped)
+        """
+        chapters = getattr(self, "_current_chapters", [])
+        if not chapters:
+            target_page = max(1, min(total_pages, int(round(target_val))))
+            return target_page, None, False
+
+        snap_threshold = max(1.0, min(5.0, total_pages * 0.025))
+        best_ch = None
+        min_dist = float("inf")
+        for ch_title, ch_page in chapters:
+            dist = abs(target_val - ch_page)
+            if dist < min_dist:
+                min_dist = dist
+                best_ch = (ch_title, ch_page)
+
+        if best_ch is not None and min_dist <= snap_threshold:
+            return best_ch[1], best_ch[0], True
+        else:
+            target_page = max(1, min(total_pages, int(round(target_val))))
+            return target_page, None, False
+
+    def _get_chapter_title_for_page(self, page: int) -> Optional[str]:
+        """Return the chapter title if the given page matches a chapter start boundary, else None."""
+        chapters = getattr(self, "_current_chapters", [])
+        for ch_title, ch_page in chapters:
+            if ch_page == page:
+                return ch_title
+        return None
 
     def refresh_telemetry(self, _=None):
         """Update menubar title and telemetry items in background."""
@@ -604,14 +631,7 @@ class QuadernoMenubarApp(AppBase):
                                 self.page_slider.setAllowsTickMarkValuesOnly_(False)
                                 self.page_slider.setEnabled_(tot > 1)
 
-                            if not is_recent_nav:
-                                self.doc_item.title = f"📖 {title_short} ({status.reading_state.current_page}/{status.reading_state.total_pages})"
-                                if hasattr(self, "page_slider") and self.page_slider is not None:
-                                    self.page_slider.setDoubleValue_(float(cur))
-                                if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
-                                    self.slider_page_badge.setStringValue_(f"p. {cur} / {tot}")
-
-                            # Dynamically populate Chapters Dropdown Submenu immediately
+                            # Dynamically populate Chapters Dropdown Submenu and unified slider chapters
                             doc_id = status.reading_state.document_id
                             tot_p_val = max(1, status.reading_state.total_pages)
                             toc_sig = (doc_id, len(toc) if toc else 0)
@@ -619,6 +639,7 @@ class QuadernoMenubarApp(AppBase):
                                 self._last_loaded_toc_sig = toc_sig
                                 self.chapters_menu.clear()
                                 if toc:
+                                    self._current_chapters = [(ch_title, ch_page) for ch_title, ch_page in toc]
                                     for ch_title, ch_page in toc[:40]:
                                         lbl = f"📑 {ch_title[:32]} (p. {ch_page})"
                                         def _make_jump(p):
@@ -626,36 +647,55 @@ class QuadernoMenubarApp(AppBase):
                                         self.chapters_menu.add(rumps.MenuItem(lbl, callback=_make_jump(ch_page)))
                                 elif tot_p_val > 1:
                                     landmarks = [
-                                        ("📑 Start of Document", 1),
-                                        ("📑 25%", max(1, int(round(tot_p_val * 0.25)))),
-                                        ("📑 50% (Halfway)", max(1, int(round(tot_p_val * 0.50)))),
-                                        ("📑 75%", max(1, int(round(tot_p_val * 0.75)))),
-                                        ("📑 End of Document", tot_p_val),
+                                        ("Start of Document", 1),
+                                        ("25%", max(1, int(round(tot_p_val * 0.25)))),
+                                        ("50% (Halfway)", max(1, int(round(tot_p_val * 0.50)))),
+                                        ("75%", max(1, int(round(tot_p_val * 0.75)))),
+                                        ("End of Document", tot_p_val),
                                     ]
                                     seen = set()
+                                    self._current_chapters = []
                                     for name, p in landmarks:
                                         if p not in seen:
                                             seen.add(p)
-                                            lbl = f"{name} (p. {p})"
+                                            self._current_chapters.append((name, p))
+                                            lbl = f"📑 {name} (p. {p})"
                                             def _make_jump_lm(p_val):
                                                 return lambda _: self._async_nav("goto", page=p_val)
                                             self.chapters_menu.add(rumps.MenuItem(lbl, callback=_make_jump_lm(p)))
                                 else:
+                                    self._current_chapters = []
                                     self.chapters_menu.add(rumps.MenuItem("Single page document"))
+
+                            if not is_recent_nav:
+                                self.doc_item.title = f"📖 {title_short} ({status.reading_state.current_page}/{status.reading_state.total_pages})"
+                                if hasattr(self, "page_slider") and self.page_slider is not None:
+                                    self.page_slider.setDoubleValue_(float(cur))
+                                if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
+                                    self.slider_page_badge.setStringValue_(f"p. {cur} / {tot}")
+                                if hasattr(self, "slider_chapter_label") and self.slider_chapter_label is not None:
+                                    ch_name = self._get_chapter_title_for_page(cur)
+                                    self.slider_chapter_label.setStringValue_(f"📑 {ch_name}" if ch_name else "")
                         else:
+                            self._current_chapters = []
                             self.doc_item.title = "No active document open"
                             if hasattr(self, "page_slider") and self.page_slider is not None:
                                 self.page_slider.setEnabled_(False)
                                 if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
                                     self.slider_page_badge.setStringValue_("p. - / -")
+                                if hasattr(self, "slider_chapter_label") and self.slider_chapter_label is not None:
+                                    self.slider_chapter_label.setStringValue_("")
                             if getattr(self, "_last_loaded_toc_sig", None) is not None:
                                 self._last_loaded_toc_sig = None
                                 self.chapters_menu.clear()
                                 self.chapters_menu.add(rumps.MenuItem("No active document"))
                     else:
+                        self._current_chapters = []
                         self.title = "📖 (offline)"
                         self.status_item.title = "✗ Disconnected"
                         self.doc_item.title = "Device Offline"
+                        if hasattr(self, "slider_chapter_label") and self.slider_chapter_label is not None:
+                            self.slider_chapter_label.setStringValue_("")
                         if getattr(self, "_last_loaded_toc_sig", None) is not None:
                             self._last_loaded_toc_sig = None
                             self.chapters_menu.clear()
@@ -828,6 +868,9 @@ class QuadernoMenubarApp(AppBase):
                 self.page_slider.setDoubleValue_(float(target_page))
             if hasattr(self, "slider_page_badge") and self.slider_page_badge is not None:
                 self.slider_page_badge.setStringValue_(f"p. {target_page} / {tot}")
+            if hasattr(self, "slider_chapter_label") and self.slider_chapter_label is not None:
+                ch_name = self._get_chapter_title_for_page(target_page)
+                self.slider_chapter_label.setStringValue_(f"📑 {ch_name}" if ch_name else "")
 
         self._dispatch_to_main(_apply_optimistic)
 

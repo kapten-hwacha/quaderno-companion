@@ -227,5 +227,100 @@ def test_menubar_push_menu_structure():
     assert "🔗 Push URL..." in sub_titles
 
 
+def test_menubar_slider_chapter_clipping_logic():
+    """Verify _get_clipped_chapter snaps to chapter boundaries and _get_chapter_title_for_page detects chapters."""
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    app._current_chapters = [
+        ("Chapter 1: Intro", 1),
+        ("Chapter 2: Core", 20),
+        ("Chapter 3: Conclusion", 50),
+    ]
+
+    # Snap distance for 50 pages is max(1.0, min(5.0, 50 * 0.025)) = 1.25 -> ~1-2 pages
+    # 1. Close to Chapter 2 (e.g. 19.8 or 20.9) -> clips to 20
+    page, ch_title, is_clipped = app._get_clipped_chapter(19.8, 50)
+    assert is_clipped is True
+    assert page == 20
+    assert ch_title == "Chapter 2: Core"
+
+    page, ch_title, is_clipped = app._get_clipped_chapter(21.0, 50)
+    assert is_clipped is True
+    assert page == 20
+    assert ch_title == "Chapter 2: Core"
+
+    # 2. Far from any chapter (e.g. page 35) -> does NOT clip
+    page, ch_title, is_clipped = app._get_clipped_chapter(35.2, 50)
+    assert is_clipped is False
+    assert page == 35
+    assert ch_title is None
+
+    # 3. Test _get_chapter_title_for_page
+    assert app._get_chapter_title_for_page(1) == "Chapter 1: Intro"
+    assert app._get_chapter_title_for_page(20) == "Chapter 2: Core"
+    assert app._get_chapter_title_for_page(35) is None
+
+
+def test_menubar_slider_magnetic_snapping_ui():
+    """Verify handleSlider_ magnetically snaps slider knob and updates chapter label and page badge."""
+    from quaderno_companion.device.manager import ReadingState
+
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    state = ReadingState(
+        document_id="doc-book",
+        title="Test Book",
+        current_page=1,
+        total_pages=50,
+    )
+    app._last_reading_state = state
+    app._current_chapters = [
+        ("Chapter 1: Begin", 1),
+        ("Chapter 2: Middle", 25),
+    ]
+
+    if getattr(app, "page_slider", None) is not None:
+        handler = app._slider_handler
+
+        # Drag slider to 24.8 (within snap distance of Chapter 2 at page 25)
+        app.page_slider.setDoubleValue_(24.8)
+        handler.handleSlider_(app.page_slider)
+
+        # Knob snapped to 25.0
+        assert app.page_slider.doubleValue() == 25.0
+        # Chapter label shows Chapter 2
+        assert "Chapter 2: Middle" in app.slider_chapter_label.stringValue()
+        # Page badge updated
+        assert "25 / 50" in app.slider_page_badge.stringValue()
+
+        # Drag slider to 12.0 (between chapters, outside snap distance)
+        app.page_slider.setDoubleValue_(12.0)
+        handler.handleSlider_(app.page_slider)
+
+        assert app.page_slider.doubleValue() == 12.0
+        # Chapter label is cleared when not clipped to a chapter
+        assert app.slider_chapter_label.stringValue() == ""
+        assert "12 / 50" in app.slider_page_badge.stringValue()
+
+
+def test_menubar_menu_unification():
+    """Verify that navigation and chapters are unified into page_slider_item, and separate chapters_menu and buttons are removed from top-level menu."""
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    top_items = list(app.menu.values())
+
+    # chapters_menu should NOT be in the top-level menu
+    assert app.chapters_menu not in top_items
+    # page_control_item buttons should be completely removed
+    assert not hasattr(app, "page_control_item")
+
+    # page_slider_item should be present in the top-level menu
+    assert app.page_slider_item in top_items
+
+
+
 
 
