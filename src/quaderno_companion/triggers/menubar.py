@@ -33,7 +33,7 @@ except Exception:
     class _DummyRumps:
         class MenuItem:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
-                pass
+                self.title = args[0] if args else ""
             def add(self, *args: Any, **kwargs: Any) -> None:
                 pass
             def clear(self) -> None:
@@ -58,7 +58,9 @@ from quaderno_companion.agent.tools import (
     tool_push_document,
 )
 from quaderno_companion.config import settings
+from quaderno_companion.device.client import DeviceNotConnectedError
 from quaderno_companion.device.manager import device_manager
+from quaderno_companion.push_queue import push_queue
 from quaderno_companion.triggers.preview import (
     get_preview_document_info,
     notify,
@@ -435,6 +437,9 @@ class QuadernoMenubarApp(AppBase):
         self.other_push_menu.add(rumps.MenuItem("👁️ Push from Preview", callback=self.push_preview))
         self.other_push_menu.add(rumps.MenuItem("🔗 Push URL...", callback=self.push_url_dialog))
 
+        self.queue_menu = rumps.MenuItem("Queued Files (0)")
+        self._update_queue_menu()
+
         self.menu = [
             self.doc_item,
             self.page_slider_item,
@@ -443,6 +448,7 @@ class QuadernoMenubarApp(AppBase):
             self.push_file_item,
             self.open_folder_item,
             self.other_push_menu,
+            self.queue_menu,
             None,  # Separator
             self.status_item,
             self.battery_item,
@@ -505,10 +511,97 @@ class QuadernoMenubarApp(AppBase):
             notify("Quaderno Companion", "Preview Mirror Disabled", "Automatic page mirroring stopped.")
 
     def on_tick(self, _=None):
-        """Periodic tick handler for telemetry and live watch sync."""
+        """Periodic tick handler for telemetry, push queue flush, and live watch sync."""
         self.refresh_telemetry()
+        self._check_and_flush_queue()
         if self.watch_mode_item.state:
             self._check_live_preview_sync()
+
+    def _update_queue_menu(self):
+        """Update queued files submenu reflecting current push queue status."""
+        def _apply():
+            try:
+                items = push_queue.list_items()
+                count = len(items)
+                self.queue_menu.title = f"Queued Files ({count})"
+                try:
+                    self.queue_menu.clear()
+                except Exception:
+                    pass
+                self.queue_menu.add(rumps.MenuItem("⚡ Push Queue Now", callback=self.flush_queue_manually))
+                self.queue_menu.add(rumps.MenuItem("🗑️ Clear Queue", callback=self.clear_queue_manually))
+                self.queue_menu.add(None)
+                if not items:
+                    self.queue_menu.add(rumps.MenuItem("(No files queued)"))
+                else:
+                    for item in items[:10]:
+                        display = f"{item.title} ({item.remote_folder})"
+                        if len(display) > 36:
+                            display = display[:33] + "..."
+                        self.queue_menu.add(rumps.MenuItem(display))
+                    if len(items) > 10:
+                        self.queue_menu.add(rumps.MenuItem(f"... and {len(items)-10} more"))
+            except Exception as e:
+                logger.debug(f"Error updating queue menu: {e}")
+
+        self._dispatch_to_main(_apply)
+
+    def flush_queue_manually(self, _=None):
+        """Manually trigger push queue flush from menu bar."""
+        if not push_queue.has_items():
+            notify("Quaderno Companion", "Push Queue", "The push queue is empty.")
+            return
+
+        async def _run():
+            notify("Quaderno Companion", "Pushing Queue...", "Connecting to Quaderno...")
+            try:
+                res = await push_queue.flush(client=None, device_mgr=device_manager)
+                if not res.device_connected:
+                    show_alert("Quaderno Offline", "Could not connect to Quaderno. Queued files will be pushed automatically once connected.")
+                elif res.flushed:
+                    notify("Quaderno Companion", "Queue Pushed", f"Successfully pushed {len(res.flushed)} document(s) to Quaderno.")
+                    self.refresh_telemetry()
+                elif res.failed:
+                    show_alert("Queue Push Error", f"Failed to push {len(res.failed)} document(s): {res.failed[0].get('error')}")
+            except Exception as err:
+                show_alert("Queue Push Error", str(err))
+            finally:
+                self._update_queue_menu()
+
+        bg_worker.submit(_run())
+
+    def clear_queue_manually(self, _=None):
+        """Clear all queued items from menu bar."""
+        count = push_queue.clear()
+        notify("Quaderno Companion", "Queue Cleared", f"Cleared {count} document(s) from push queue.")
+        self._update_queue_menu()
+
+    def _check_and_flush_queue(self):
+        """Check if device is connected and flush offline push queue."""
+        if getattr(self, "_queue_flush_in_progress", False):
+            return
+
+        if not push_queue.has_items():
+            return
+
+        async def _flush_coro():
+            self._queue_flush_in_progress = True
+            try:
+                status = await device_manager.get_status()
+                if not status.is_connected:
+                    return
+
+                res = await push_queue.flush(client=None, device_mgr=device_manager)
+                if res.flushed:
+                    notify("Quaderno Companion", "Queue Pushed", f"Successfully pushed {len(res.flushed)} queued document(s) to Quaderno.")
+                    self.refresh_telemetry()
+                self._update_queue_menu()
+            except Exception as e:
+                logger.debug(f"Menubar queue flush error: {e}")
+            finally:
+                self._queue_flush_in_progress = False
+
+        bg_worker.submit(_flush_coro())
 
     def _check_live_preview_sync(self):
         """Check if Preview page or document changed and synchronize."""
@@ -752,6 +845,24 @@ class QuadernoMenubarApp(AppBase):
                 notify("Quaderno Companion", "Pushed to Device", res.get("message", "Sent to device."))
                 self.refresh_telemetry()
             except Exception as e:
+                is_disconnected = isinstance(e, DeviceNotConnectedError) or any(
+                    phrase in str(e).lower()
+                    for phrase in ("offline", "not connected", "connection lost", "not paired", "device unreachable", "failed to establish a new connection")
+                )
+                if is_disconnected:
+                    try:
+                        item = await push_queue.enqueue(
+                            source_url_or_path=target,
+                            title=title,
+                            page=page,
+                            destination_folder=target_dest,
+                        )
+                        notify("Quaderno Companion", "Document Queued", f"Queued '{item.title}'. Will push once Quaderno connects.")
+                        self._update_queue_menu()
+                        return
+                    except Exception as q_err:
+                        logger.error(f"Failed to queue document: {q_err}", exc_info=True)
+
                 logger.error(f"Error executing push: {e}", exc_info=True)
                 show_alert("Quaderno Push Error", str(e))
 

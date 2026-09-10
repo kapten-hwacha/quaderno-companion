@@ -19,7 +19,9 @@ from quaderno_companion.agent.tools import (
     tool_push_document,
 )
 from quaderno_companion.config import settings
+from quaderno_companion.device.client import DeviceNotConnectedError
 from quaderno_companion.device.manager import device_manager
+from quaderno_companion.push_queue import push_queue
 
 app = typer.Typer(
     name="quadctl",
@@ -239,6 +241,8 @@ def push(
     profile: Optional[str] = typer.Option(None, "--profile", help="Target screen ('A4' or 'A5')"),
     clean: bool = typer.Option(False, "--clean", "-c", help="Automatically delete previously pushed document without asking"),
     keep: bool = typer.Option(False, "--keep", "-k", help="Keep previously pushed document without asking"),
+    queue: bool = typer.Option(False, "--queue", "-q", help="Queue document for later push without connecting now"),
+    no_queue: bool = typer.Option(False, "--no-queue", help="Fail immediately if device is offline without queuing"),
 ):
     """Push a web page, paper, or document to Quaderno with E-ink optimization."""
     from quaderno_companion.triggers.browser import get_active_browser_tab
@@ -264,6 +268,24 @@ def push(
     should_delete_prev = _resolve_prev_doc_deletion(prev_doc, clean, keep)
 
     async def _push():
+        if queue:
+            with console.status(f"[bold cyan]Ingesting and optimizing '{target_source}' for push queue..."):
+                try:
+                    item = await push_queue.enqueue(
+                        source_url_or_path=target_source,
+                        title=target_title,
+                        page=page,
+                        profile=profile,
+                        destination_folder=target_dest,
+                        clean_prev=should_delete_prev,
+                    )
+                    rprint(f"[bold green]✓[/bold green] Queued '[white]{item.title}[/white]' in [bold cyan]{target_dest}[/bold cyan] (will push when connected)")
+                    rprint(f"[dim]Queue has {push_queue.count()} item(s). Run 'quadctl queue' to manage.[/dim]")
+                    return
+                except Exception as e:
+                    rprint(f"[bold red]Failed to queue document:[/bold red] {e}")
+                    sys.exit(1)
+
         with console.status(f"[bold cyan]Ingesting and optimizing '{target_source}' for Quaderno..."):
             try:
                 res = await tool_push_document(
@@ -276,9 +298,39 @@ def push(
                 rprint(f"[bold green]✓[/bold green] {res['message']} in [bold cyan]{target_dest}[/bold cyan]")
                 if should_delete_prev:
                     await _delete_prev_doc(prev_doc)
+
+                # Flush any other previously queued items now that we are connected
+                if push_queue.has_items():
+                    try:
+                        flush_res = await push_queue.flush()
+                        if flush_res.flushed:
+                            rprint(f"[bold green]✓[/bold green] Also pushed {len(flush_res.flushed)} previously queued document(s) to Quaderno.")
+                    except Exception as flush_err:
+                        pass
             except Exception as e:
-                rprint(f"[bold red]Failed to push document:[/bold red] {e}")
-                sys.exit(1)
+                is_disconnected = isinstance(e, DeviceNotConnectedError) or any(
+                    phrase in str(e).lower()
+                    for phrase in ("not connected", "connection lost", "not paired", "failed to establish a new connection")
+                )
+                if is_disconnected and not no_queue:
+                    rprint("[yellow]Quaderno is not currently connected.[/yellow]")
+                    try:
+                        item = await push_queue.enqueue(
+                            source_url_or_path=target_source,
+                            title=target_title,
+                            page=page,
+                            profile=profile,
+                            destination_folder=target_dest,
+                            clean_prev=should_delete_prev,
+                        )
+                        rprint(f"[bold green]✓[/bold green] Queued '[white]{item.title}[/white]' in [bold cyan]{target_dest}[/bold cyan] (will push when connected)")
+                        rprint(f"[dim]Queue has {push_queue.count()} item(s). Run 'quadctl queue' to manage.[/dim]")
+                    except Exception as q_err:
+                        rprint(f"[bold red]Failed to queue document:[/bold red] {q_err}")
+                        sys.exit(1)
+                else:
+                    rprint(f"[bold red]Failed to push document:[/bold red] {e}")
+                    sys.exit(1)
 
     run_async(_push())
 
@@ -290,6 +342,8 @@ def window(
     rotate: bool = typer.Option(True, "--rotate/--no-rotate", help="Auto-rotate landscape window 90° for full-screen portrait reading"),
     clean: bool = typer.Option(False, "--clean", "-c", help="Automatically delete previously pushed document without asking"),
     keep: bool = typer.Option(False, "--keep", "-k", help="Keep previously pushed document without asking"),
+    queue: bool = typer.Option(False, "--queue", "-q", help="Queue window capture for later push without connecting now"),
+    no_queue: bool = typer.Option(False, "--no-queue", help="Fail immediately if device is offline without queuing"),
 ):
     """Capture the currently active macOS window and push it to Quaderno."""
     from quaderno_companion.triggers.window import capture_active_window_pdf
@@ -303,17 +357,62 @@ def window(
         with console.status("[bold cyan]Capturing and optimizing active window for Quaderno..."):
             try:
                 pdf_path, filename, doc_title = capture_active_window_pdf(profile_name=profile, auto_rotate=rotate)
-                res = await tool_push_document(
-                    source_url_or_path=str(pdf_path),
-                    title=doc_title,
-                    page=1,
-                    profile=profile,
-                    destination_folder=target_dest,
-                )
-                rprint(f"[bold green]✓[/bold green] Captured and pushed '[white]{doc_title}[/white]' to Quaderno ({target_dest}).")
 
-                if should_delete_prev:
-                    await _delete_prev_doc(prev_doc)
+                if queue:
+                    item = push_queue.enqueue_bytes(
+                        pdf_bytes=pdf_path.read_bytes(),
+                        filename=filename,
+                        title=doc_title,
+                        page=1,
+                        destination_folder=target_dest,
+                        source="window_capture",
+                        clean_prev=should_delete_prev,
+                    )
+                    rprint(f"[bold green]✓[/bold green] Queued window capture '[white]{doc_title}[/white]' (will push when connected)")
+                    rprint(f"[dim]Queue has {push_queue.count()} item(s). Run 'quadctl queue' to manage.[/dim]")
+                    return
+
+                try:
+                    res = await tool_push_document(
+                        source_url_or_path=str(pdf_path),
+                        title=doc_title,
+                        page=1,
+                        profile=profile,
+                        destination_folder=target_dest,
+                    )
+                    rprint(f"[bold green]✓[/bold green] Captured and pushed '[white]{doc_title}[/white]' to Quaderno ({target_dest}).")
+
+                    if should_delete_prev:
+                        await _delete_prev_doc(prev_doc)
+
+                    # Flush any other previously queued items now that we are connected
+                    if push_queue.has_items():
+                        try:
+                            flush_res = await push_queue.flush()
+                            if flush_res.flushed:
+                                rprint(f"[bold green]✓[/bold green] Also pushed {len(flush_res.flushed)} previously queued document(s) to Quaderno.")
+                        except Exception as flush_err:
+                            pass
+                except Exception as push_err:
+                    is_disconnected = isinstance(push_err, DeviceNotConnectedError) or any(
+                        phrase in str(push_err).lower()
+                        for phrase in ("not connected", "connection lost", "not paired", "failed to establish a new connection")
+                    )
+                    if is_disconnected and not no_queue:
+                        rprint("[yellow]Quaderno is not currently connected.[/yellow]")
+                        item = push_queue.enqueue_bytes(
+                            pdf_bytes=pdf_path.read_bytes(),
+                            filename=filename,
+                            title=doc_title,
+                            page=1,
+                            destination_folder=target_dest,
+                            source="window_capture",
+                            clean_prev=should_delete_prev,
+                        )
+                        rprint(f"[bold green]✓[/bold green] Queued window capture '[white]{doc_title}[/white]' (will push when connected)")
+                        rprint(f"[dim]Queue has {push_queue.count()} item(s). Run 'quadctl queue' to manage.[/dim]")
+                    else:
+                        raise push_err
             except Exception as e:
                 rprint(f"[bold red]Failed to capture window:[/bold red] {e}")
                 sys.exit(1)
@@ -683,6 +782,107 @@ def view_logs(
                     print(l, end="")
         except Exception as e:
             rprint(f"[red]Could not read log file: {e}[/red]")
+
+
+# ---------------- Offline Push Queue Commands ----------------
+
+queue_app = typer.Typer(
+    name="queue",
+    help="Manage documents queued for push to Quaderno when offline",
+    invoke_without_command=True,
+)
+
+
+@queue_app.callback()
+def queue_default(ctx: typer.Context):
+    """List queued files if no subcommand specified."""
+    if ctx.invoked_subcommand is None:
+        queue_list()
+
+
+@queue_app.command("list")
+def queue_list():
+    """List all documents queued for push to Quaderno."""
+    items = push_queue.list_items()
+    if not items:
+        rprint("[yellow]The push queue is empty.[/yellow]")
+        return
+
+    table = Table(title="Offline Push Queue", show_header=True, header_style="bold cyan")
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Title", style="white", min_width=20)
+    table.add_column("Destination", style="cyan")
+    table.add_column("Size", style="green", justify="right")
+    table.add_column("Queued At", style="dim")
+    table.add_column("ID", style="dim", min_width=12)
+
+    import datetime
+    for idx, item in enumerate(items, 1):
+        size_kb = round(item.file_size / 1024, 1)
+        size_str = f"{size_kb} KB" if size_kb < 1024 else f"{round(size_kb/1024, 2)} MB"
+        dt = datetime.datetime.fromtimestamp(item.created_at).strftime("%Y-%m-%d %H:%M")
+        table.add_row(str(idx), item.title, item.remote_folder, size_str, dt, item.id)
+
+    console.print(table)
+    rprint(f"[dim]Total: {len(items)} document(s) waiting for device connection.[/dim]")
+
+
+@queue_app.command("push")
+def queue_push():
+    """Push all queued documents immediately if Quaderno is connected."""
+    if not push_queue.has_items():
+        rprint("[yellow]The push queue is empty.[/yellow]")
+        return
+
+    with console.status("[bold cyan]Pushing queued documents to Quaderno..."):
+        res = push_queue.flush_sync()
+
+    if not res.device_connected:
+        rprint("[bold red]Cannot flush queue: Quaderno is not currently connected.[/bold red]")
+        rprint("[dim]Queued documents will automatically push once device connects.[/dim]")
+        sys.exit(1)
+
+    if res.flushed:
+        rprint(f"[bold green]✓[/bold green] Successfully pushed [bold white]{len(res.flushed)}[/bold white] document(s) to Quaderno:")
+        for doc in res.flushed:
+            rprint(f"  • [white]{doc['title']}[/white] -> [cyan]{doc['remote_path']}[/cyan]")
+
+    if res.failed:
+        rprint(f"[bold red]Failed to push {len(res.failed)} document(s):[/bold red]")
+        for doc in res.failed:
+            rprint(f"  • [white]{doc['title']}[/white]: {doc.get('error', 'unknown error')}")
+
+    if res.remaining > 0:
+        rprint(f"[yellow]{res.remaining} document(s) remaining in queue.[/yellow]")
+
+
+@queue_app.command("clear")
+def queue_clear():
+    """Clear all queued documents and delete staged files."""
+    count = push_queue.clear()
+    rprint(f"[bold green]✓[/bold green] Cleared {count} document(s) from push queue.")
+
+
+@queue_app.command("remove")
+def queue_remove(
+    item_id: str = typer.Argument(..., help="Queue item ID or 1-based index from list to remove"),
+):
+    """Remove a specific document from the push queue."""
+    items = push_queue.list_items()
+    target_id = item_id
+    if item_id.isdigit():
+        idx = int(item_id) - 1
+        if 0 <= idx < len(items):
+            target_id = items[idx].id
+
+    if push_queue.remove(target_id):
+        rprint(f"[bold green]✓[/bold green] Removed item [cyan]{target_id}[/cyan] from push queue.")
+    else:
+        rprint(f"[bold red]Item '{item_id}' not found in push queue.[/bold red]")
+        sys.exit(1)
+
+
+app.add_typer(queue_app, name="queue")
 
 
 if __name__ == "__main__":

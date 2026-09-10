@@ -331,8 +331,57 @@ def test_menubar_menu_unification():
 
     # page_slider_item should be present in the top-level menu
     assert app.page_slider_item in top_items
+    # queue_menu should be present in the top-level menu
+    assert app.queue_menu in top_items
 
 
+def test_menubar_queue_integration(tmp_path):
+    """Verify menubar queue menu updates and offline pushes enqueue documents."""
+    from quaderno_companion.config import settings
+    from quaderno_companion.device.client import DeviceNotConnectedError
+    from quaderno_companion.push_queue import push_queue
 
+    original_config = settings.config_dir
+    original_cache = settings.cache_dir
+    settings.config_dir = tmp_path / "config"
+    settings.cache_dir = tmp_path / "cache"
+    settings.ensure_directories()
 
+    try:
+        with patch("rumps.Timer"):
+            app = QuadernoMenubarApp()
 
+        assert app.queue_menu.title == "Queued Files (0)"
+
+        # Enqueue an item and update menu
+        push_queue.enqueue_bytes(b"%PDF dummy", "offline.pdf", title="Offline Doc")
+        app._update_queue_menu()
+        assert app.queue_menu.title == "Queued Files (1)"
+
+        # Clear queue via menubar
+        app.clear_queue_manually()
+        assert push_queue.count() == 0
+        assert app.queue_menu.title == "Queued Files (0)"
+
+        # Test offline push catches disconnect and enqueues
+        with patch("quaderno_companion.triggers.menubar.tool_push_document", side_effect=DeviceNotConnectedError("Quaderno offline")), \
+             patch("quaderno_companion.triggers.menubar.prompt_folder_dialog", return_value="Document/Companion"), \
+             patch("quaderno_companion.triggers.menubar.notify") as mock_notify, \
+             patch("quaderno_companion.pipeline.fetcher.ContentFetcher.fetch") as mock_fetch:
+            from quaderno_companion.pipeline.fetcher import FetchedDocument
+            mock_fetch.return_value = FetchedDocument(
+                title="Queued Web Article",
+                pdf_bytes=b"%PDF test",
+                filename="queued_article.pdf",
+            )
+
+            fut = app._execute_push_or_summarize(target="https://example.com/article", title="Queued Web Article")
+            if fut is not None:
+                fut.result(timeout=5.0)
+
+            assert push_queue.count() == 1
+            assert app.queue_menu.title == "Queued Files (1)"
+            mock_notify.assert_any_call("Quaderno Companion", "Document Queued", "Queued 'Queued Web Article'. Will push once Quaderno connects.")
+    finally:
+        settings.config_dir = original_config
+        settings.cache_dir = original_cache

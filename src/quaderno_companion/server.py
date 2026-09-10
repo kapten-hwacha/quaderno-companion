@@ -33,9 +33,11 @@ from quaderno_companion.agent.tools import (
     tool_push_document,
 )
 from quaderno_companion.config import settings
+from quaderno_companion.device.client import DeviceNotConnectedError
 from quaderno_companion.device.manager import device_manager
 from quaderno_companion.fs.syncer import sync_runner, syncer
 from quaderno_companion.pipeline.optimizer import EinkOptimizer
+from quaderno_companion.push_queue import push_queue
 
 logger = logging.getLogger(__name__)
 
@@ -267,19 +269,48 @@ async def open_document(
         content_type = request.headers.get("content-type", "").lower()
         dest_folder = folder
 
+        # Helper to push or queue url_or_path
+        async def _push_or_queue_url(target_url: str, doc_title: Optional[str], target_page: int, target_profile: Optional[str], target_dest: Optional[str]):
+            try:
+                return await tool_push_document(
+                    source_url_or_path=target_url,
+                    title=doc_title,
+                    page=target_page,
+                    profile=target_profile,
+                    destination_folder=target_dest,
+                )
+            except Exception as push_err:
+                is_disconnected = isinstance(push_err, DeviceNotConnectedError) or any(
+                    phrase in str(push_err).lower()
+                    for phrase in ("not connected", "connection lost", "not paired", "device unreachable", "failed to establish a new connection")
+                )
+                if is_disconnected:
+                    item = await push_queue.enqueue(
+                        source_url_or_path=target_url,
+                        title=doc_title,
+                        page=target_page,
+                        profile=target_profile,
+                        destination_folder=target_dest,
+                    )
+                    return {
+                        "status": "queued",
+                        "message": f"Quaderno is offline. Queued '{item.title}' to be pushed when connected.",
+                        "item": item.to_dict(),
+                    }
+                raise
+
         # Case 1: JSON payload
         if "application/json" in content_type:
             body = await request.json()
             payload = OpenDocumentRequest(**body)
             if payload and payload.url_or_path:
-                result = await tool_push_document(
-                    source_url_or_path=payload.url_or_path,
-                    title=payload.title,
-                    page=payload.page,
-                    profile=payload.profile,
-                    destination_folder=payload.folder,
+                return await _push_or_queue_url(
+                    target_url=payload.url_or_path,
+                    doc_title=payload.title,
+                    target_page=payload.page,
+                    target_profile=payload.profile,
+                    target_dest=payload.folder,
                 )
-                return result
 
         if payload and payload.folder:
             dest_folder = payload.folder
@@ -322,25 +353,45 @@ async def open_document(
 
             opt_pdf = await asyncio.to_thread(_convert_and_optimize)
 
-            result = await device_manager.open_document(
-                pdf_bytes=opt_pdf,
-                filename=f"{doc_title}.pdf",
-                title=doc_title,
-                page=page,
-                remote_folder=dest_folder,
-            )
-            return {"status": "success", "result": result}
+            try:
+                result = await device_manager.open_document(
+                    pdf_bytes=opt_pdf,
+                    filename=f"{doc_title}.pdf",
+                    title=doc_title,
+                    page=page,
+                    remote_folder=dest_folder,
+                )
+                return {"status": "success", "result": result}
+            except Exception as push_err:
+                is_disconnected = isinstance(push_err, DeviceNotConnectedError) or any(
+                    phrase in str(push_err).lower()
+                    for phrase in ("not connected", "connection lost", "not paired", "device unreachable", "failed to establish a new connection")
+                )
+                if is_disconnected:
+                    item = push_queue.enqueue_bytes(
+                        pdf_bytes=opt_pdf,
+                        filename=f"{doc_title}.pdf",
+                        title=doc_title,
+                        page=page,
+                        destination_folder=dest_folder,
+                        source="file_upload",
+                    )
+                    return {
+                        "status": "queued",
+                        "message": f"Quaderno is offline. Queued '{doc_title}' to be pushed when connected.",
+                        "item": item.to_dict(),
+                    }
+                raise
 
         # Case 3: Form url_or_path
         if payload and payload.url_or_path:
-            result = await tool_push_document(
-                source_url_or_path=payload.url_or_path,
-                title=payload.title,
-                page=payload.page,
-                profile=payload.profile,
-                destination_folder=dest_folder,
+            return await _push_or_queue_url(
+                target_url=payload.url_or_path,
+                doc_title=payload.title,
+                target_page=payload.page,
+                target_profile=payload.profile,
+                target_dest=dest_folder,
             )
-            return result
 
         raise HTTPException(status_code=400, detail="Must provide either a file upload or 'url_or_path' in payload.")
     except HTTPException:
@@ -351,6 +402,78 @@ async def open_document(
     except Exception as e:
         logger.error(f"Error opening document: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to open document on Quaderno.")
+
+
+# ---------------- Offline Push Queue API ----------------
+
+@app.get(
+    "/api/queue",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def list_push_queue():
+    """List all documents currently waiting in the offline push queue."""
+    try:
+        items = push_queue.list_items()
+        return {
+            "status": "success",
+            "count": len(items),
+            "items": [item.to_dict() for item in items],
+        }
+    except Exception as e:
+        logger.error(f"Error listing push queue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list push queue.")
+
+
+@app.post(
+    "/api/queue/flush",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def flush_push_queue():
+    """Manually flush the offline push queue to Quaderno."""
+    try:
+        res = await push_queue.flush(client=None, device_mgr=device_manager)
+        return {
+            "status": "success",
+            "device_connected": res.device_connected,
+            "flushed": res.flushed,
+            "failed": res.failed,
+            "remaining": res.remaining,
+        }
+    except Exception as e:
+        logger.error(f"Error flushing push queue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to flush push queue.")
+
+
+@app.delete(
+    "/api/queue",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def clear_push_queue():
+    """Clear all documents from the offline push queue."""
+    try:
+        cleared = push_queue.clear()
+        return {"status": "success", "cleared": cleared}
+    except Exception as e:
+        logger.error(f"Error clearing push queue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to clear push queue.")
+
+
+@app.delete(
+    "/api/queue/{item_id}",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def remove_push_queue_item(item_id: str):
+    """Remove a specific document from the offline push queue."""
+    try:
+        success = push_queue.remove(item_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Item not found in push queue.")
+        return {"status": "success", "removed_id": item_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error removing item {item_id} from push queue: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to remove item from push queue.")
 
 
 @app.post(

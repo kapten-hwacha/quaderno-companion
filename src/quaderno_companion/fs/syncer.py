@@ -493,6 +493,17 @@ class QuadernoSyncer:
 
         state["_folders"] = sorted(list(set(list(remote_folders.keys()) + list(local_folders))))
         self._save_state(state)
+
+        if settings.auto_flush_queue:
+            try:
+                from quaderno_companion.push_queue import push_queue
+                if push_queue.has_items():
+                    flush_res = push_queue.flush_sync(client=client)
+                    if flush_res.flushed:
+                        logger.info(f"Auto-flushed {len(flush_res.flushed)} queued document(s) during sync pass")
+            except Exception as q_err:
+                logger.debug(f"Queue flush during sync skipped: {q_err}")
+
         return result
 
     def get_known_folders(self, client: Optional[Any] = None) -> List[str]:

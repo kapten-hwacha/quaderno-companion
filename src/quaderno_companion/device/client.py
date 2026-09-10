@@ -740,3 +740,9 @@ class QuadernoClient:
             logger.warning(f"Failed to set standby timeout to {timeout_value}: {e}")
             return False
 
+    def display_document_sync(self, document_id: str, page: int = 1) -> None:
+        """Instruct Quaderno to open and display a document at a specific page (synchronous)."""
+        dp = self._ensure_dp_instance()
+        self._run_sync_with_reauth(lambda: dp.display_document(document_id=document_id, page=page))
+        logger.info(f"Quaderno viewer opened document_id={document_id} at page={page}")
+

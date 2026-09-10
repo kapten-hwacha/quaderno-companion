@@ -127,6 +127,14 @@ class Settings(BaseSettings):
         default="sync_state.json",
         description="State database file for tracking synced file hashes and mtimes.",
     )
+    queue_file: str = Field(
+        default="queue.json",
+        description="State database file for tracking queued documents to be pushed.",
+    )
+    auto_flush_queue: bool = Field(
+        default=True,
+        description="Whether to automatically push queued files when Quaderno connects.",
+    )
 
     # Local Cache & Temp
     cache_dir: Path = Field(
@@ -161,6 +169,14 @@ class Settings(BaseSettings):
         return self.config_dir / self.sync_state_file
 
     @property
+    def queue_path(self) -> Path:
+        return self.config_dir / self.queue_file
+
+    @property
+    def queue_cache_dir(self) -> Path:
+        return self.cache_dir / "queue"
+
+    @property
     def toc_cache_path(self) -> Path:
         return self.config_dir / "toc_cache.json"
 
@@ -189,11 +205,13 @@ class Settings(BaseSettings):
         """Create necessary config, cache, and sync directories with safe permissions."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.queue_cache_dir.mkdir(parents=True, exist_ok=True)
         self.sync_dir.mkdir(parents=True, exist_ok=True)
         try:
             import os
             os.chmod(self.config_dir, 0o700)
             os.chmod(self.cache_dir, 0o700)
+            os.chmod(self.queue_cache_dir, 0o700)
         except Exception:
             pass
 
