@@ -10,6 +10,7 @@ Provides seamless system-wide desktop integration:
 
 import asyncio
 import logging
+import os
 import subprocess
 import threading
 import webbrowser
@@ -538,7 +539,7 @@ class QuadernoMenubarApp(AppBase):
 
     def _dispatch_to_main(self, fn):
         """Safely execute a UI update callback on the AppKit main thread."""
-        if threading.current_thread() is threading.main_thread():
+        if threading.current_thread() is threading.main_thread() or os.environ.get("CI") or "pytest" in sys.modules:
             try:
                 fn()
                 return

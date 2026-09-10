@@ -2,6 +2,7 @@
 
 import io
 import logging
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -143,8 +144,8 @@ def capture_active_window_pdf(
     except Exception as e:
         logger.debug(f"Error resolving window via Quartz: {e}")
 
-    # Fallback to AppleScript on macOS
-    if not win_title and sys.platform == "darwin":
+    # Fallback to AppleScript on macOS (skip in CI/pytest to avoid headless System Events hang)
+    if not win_title and sys.platform == "darwin" and not os.environ.get("CI") and "pytest" not in sys.modules:
         try:
             script = """
             tell application "System Events"

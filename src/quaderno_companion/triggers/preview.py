@@ -4,6 +4,7 @@ import ctypes
 import ctypes.util
 import json
 import logging
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -28,12 +29,16 @@ def notify(title: str, subtitle: str, message: str):
     """Display native desktop notification across macOS (osascript) and Linux (notify-send)."""
     # macOS
     if sys.platform == "darwin":
+        if os.environ.get("CI") and "pytest" in sys.modules:
+            logger.debug(f"[Notification] {title} - {subtitle}: {message}")
+            return
+
         safe_title = _applescript_quote(title, 80)
         safe_subtitle = _applescript_quote(subtitle, 80)
         safe_msg = _applescript_quote(message, 200)
         script = f"display notification {safe_msg} with title {safe_title} subtitle {safe_subtitle}"
         try:
-            subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=2.0, check=False)
             return
         except Exception:
             pass
@@ -41,7 +46,7 @@ def notify(title: str, subtitle: str, message: str):
     # Linux (notify-send)
     body = f"{subtitle}\n{message}" if subtitle else message
     try:
-        subprocess.run(["notify-send", title, body], capture_output=True, check=False)
+        subprocess.run(["notify-send", title, body], capture_output=True, timeout=2.0, check=False)
     except Exception:
         logger.info(f"[Notification] {title} - {body}")
 
@@ -50,6 +55,10 @@ def show_alert(title: str, message: str):
     """Display an inescapable foreground alert dialog on macOS or Linux."""
     # macOS
     if sys.platform == "darwin":
+        if os.environ.get("CI") and "pytest" in sys.modules:
+            logger.warning(f"[Alert] {title}: {message}")
+            return
+
         safe_title = _applescript_quote(title, 100)
         safe_msg = _applescript_quote(message, 1000)
         script = f"""
@@ -59,20 +68,20 @@ def show_alert(title: str, message: str):
         end tell
         """
         try:
-            subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=3.0, check=False)
             return
         except Exception:
             pass
 
     # Linux (zenity / kdialog)
     try:
-        subprocess.run(["zenity", "--warning", f"--title={title}", f"--text={message}"], capture_output=True, check=False)
+        subprocess.run(["zenity", "--warning", f"--title={title}", f"--text={message}"], capture_output=True, timeout=3.0, check=False)
         return
     except Exception:
         pass
 
     try:
-        subprocess.run(["kdialog", "--sorry", message, f"--title={title}"], capture_output=True, check=False)
+        subprocess.run(["kdialog", "--sorry", message, f"--title={title}"], capture_output=True, timeout=3.0, check=False)
         return
     except Exception:
         pass
@@ -84,6 +93,9 @@ def prompt_text_dialog(title: str, prompt: str, default_text: str = "") -> Optio
     """Display a native foreground input prompt dialog on macOS or Linux."""
     # macOS
     if sys.platform == "darwin":
+        if os.environ.get("CI") and "pytest" in sys.modules:
+            return default_text
+
         safe_title = _applescript_quote(title, 100)
         safe_prompt = _applescript_quote(prompt, 500)
         safe_default = _applescript_quote(default_text, 1000)
@@ -96,7 +108,7 @@ def prompt_text_dialog(title: str, prompt: str, default_text: str = "") -> Optio
         end tell
         """
         try:
-            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=5.0, check=False)
             if res.returncode == 0:
                 return res.stdout.strip()
         except Exception:
@@ -245,6 +257,8 @@ def prompt_delete_previous_dialog(prev_title: str) -> bool:
 
     # macOS
     if sys.platform == "darwin":
+        if os.environ.get("CI") and "pytest" in sys.modules:
+            return False
         safe_msg = _applescript_quote(msg, 500)
         safe_title = _applescript_quote("Quaderno Companion", 80)
         script = f"""
@@ -255,7 +269,7 @@ def prompt_delete_previous_dialog(prev_title: str) -> bool:
         end tell
         """
         try:
-            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, check=False)
+            res = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=5.0, check=False)
             return res.returncode == 0 and "Delete" in res.stdout
         except Exception:
             return False

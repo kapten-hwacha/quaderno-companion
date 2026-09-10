@@ -52,7 +52,15 @@ def test_menubar_instant_page_navigation():
     )
     app._last_reading_state = state
 
+    def _close_coro(coro):
+        try:
+            coro.close()
+        except Exception:
+            pass
+        return MagicMock()
+
     with patch("quaderno_companion.triggers.menubar.tool_navigate_reader", new_callable=AsyncMock) as mock_nav, \
+         patch("quaderno_companion.triggers.menubar.bg_worker.submit", side_effect=_close_coro) as mock_submit, \
          patch.object(app, "refresh_telemetry"):
         # Test nav_next
         app.nav_next(None)
@@ -284,25 +292,29 @@ def test_menubar_slider_magnetic_snapping_ui():
     if getattr(app, "page_slider", None) is not None:
         handler = app._slider_handler
 
-        # Drag slider to 24.8 (within snap distance of Chapter 2 at page 25)
-        app.page_slider.setDoubleValue_(24.8)
-        handler.handleSlider_(app.page_slider)
+        with patch.object(app, "_async_nav"):
+            # Drag slider to 24.8 (within snap distance of Chapter 2 at page 25)
+            app.page_slider.setDoubleValue_(24.8)
+            handler.handleSlider_(app.page_slider)
 
-        # Knob snapped to 25.0
-        assert app.page_slider.doubleValue() == 25.0
-        # Chapter label shows Chapter 2
-        assert "Chapter 2: Middle" in app.slider_chapter_label.stringValue()
-        # Page badge updated
-        assert "25 / 50" in app.slider_page_badge.stringValue()
+            # Knob snapped to 25.0
+            assert app.page_slider.doubleValue() == 25.0
+            # Chapter label shows Chapter 2
+            assert "Chapter 2: Middle" in app.slider_chapter_label.stringValue()
+            # Page badge updated
+            assert "25 / 50" in app.slider_page_badge.stringValue()
 
-        # Drag slider to 12.0 (between chapters, outside snap distance)
-        app.page_slider.setDoubleValue_(12.0)
-        handler.handleSlider_(app.page_slider)
+            # Drag slider to 12.0 (between chapters, outside snap distance)
+            app.page_slider.setDoubleValue_(12.0)
+            handler.handleSlider_(app.page_slider)
 
-        assert app.page_slider.doubleValue() == 12.0
-        # Chapter label is cleared when not clipped to a chapter
-        assert app.slider_chapter_label.stringValue() == ""
-        assert "12 / 50" in app.slider_page_badge.stringValue()
+            assert app.page_slider.doubleValue() == 12.0
+            # Chapter label is cleared when not clipped to a chapter
+            assert app.slider_chapter_label.stringValue() == ""
+            assert "12 / 50" in app.slider_page_badge.stringValue()
+
+        if getattr(handler, "_debounce_timer", None) is not None:
+            handler._debounce_timer.cancel()
 
 
 def test_menubar_menu_unification():
