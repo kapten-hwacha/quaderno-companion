@@ -1,6 +1,6 @@
 [project]
 name = "quaderno-companion"
-version = "0.2.0"
+version = "0.2.1"
 description = "Autonomous background agent and E-ink bridge for Fujitsu Quaderno Gen 2"
 readme = "README.md"
 authors = [

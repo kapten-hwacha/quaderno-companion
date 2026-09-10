@@ -118,10 +118,10 @@ if sys.platform == "darwin":
     except ImportError:
         import tomli as tomllib  # type: ignore
 
-    _version = "0.2.0"
+    _version = "0.2.1"
     try:
         with open(PROJECT_ROOT / "pyproject.toml", "rb") as _f:
-            _version = tomllib.load(_f).get("project", {}).get("version", "0.2.0")
+            _version = tomllib.load(_f).get("project", {}).get("version", "0.2.1")
     except Exception:
         pass
 
