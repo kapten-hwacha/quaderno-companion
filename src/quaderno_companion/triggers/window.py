@@ -185,7 +185,7 @@ def capture_active_window_pdf(
         raise RuntimeError("Could not capture active window (screencapture/grim/maim/scrot/import not available or failed)")
 
     # Convert captured PNG into a high-contrast E-ink PDF
-    import pymupdf as fitz
+    import pymupdf
     from PIL import Image
     from quaderno_companion.config import SCREEN_PROFILES
     prof = SCREEN_PROFILES.get(target_profile, SCREEN_PROFILES["A4"])
@@ -202,19 +202,19 @@ def capture_active_window_pdf(
 
     # Use standard ISO paper dimensions for Quaderno (A4 = 595x842 pt, A5 = 420x595 pt)
     paper_format = "a5" if target_profile.upper() == "A5" else "a4"
-    pt_w, pt_h = fitz.paper_size(paper_format)
+    pt_w, pt_h = pymupdf.paper_size(paper_format)
 
     # Create PDF page matching the full Quaderno A4/A5 screen
-    doc = fitz.open()
+    doc = pymupdf.open()
     page = doc.new_page(width=pt_w, height=pt_h)
 
     # Insert uncropped image stretched to fill 100% of the canvas edge-to-edge on all 4 borders (0 margins)
-    rect = fitz.Rect(0, 0, pt_w, pt_h)
+    rect = pymupdf.Rect(0, 0, pt_w, pt_h)
     page.insert_image(rect, filename=tmp_png, keep_proportion=False)
 
     optimized_pdf = doc.tobytes(
         garbage=4,
-        clean=True,
+        clean=False,
         deflate=True,
         deflate_images=True,
     )

@@ -1,4 +1,4 @@
-"""E-Ink Preprocessing and Optimization Pipeline using PyMuPDF (fitz).
+"""E-Ink Preprocessing and Optimization Pipeline using PyMuPDF.
 
 Optimizes PDFs for Fujitsu Quaderno Gen 2 (A4/A5) displays:
 1. Whitespace / Margin Trimming: Expands content area by removing oversized margins.
@@ -46,22 +46,22 @@ class EinkOptimizer:
         Returns:
             Optimized PDF as bytes.
         """
-        import pymupdf as fitz
+        import pymupdf
         if dither_raster:
             from PIL import Image, ImageEnhance
 
         if isinstance(input_data, (str, Path)):
-            doc = fitz.open(str(input_data))
+            doc = pymupdf.open(str(input_data))
         else:
-            doc = fitz.open(stream=input_data, filetype="pdf")
+            doc = pymupdf.open(stream=input_data, filetype="pdf")
 
         # Create target output document
-        out_doc = fitz.open()
+        out_doc = pymupdf.open()
 
         # Target dimensions in standard ISO PDF points (72 points/inch: A4=595x842pt, A5=420x595pt)
         paper_code = "a5" if "A5" in self.profile.name else "a4"
-        target_pt_w, target_pt_h = fitz.paper_size(paper_code)
-        target_rect = fitz.Rect(0, 0, target_pt_w, target_pt_h)
+        target_pt_w, target_pt_h = pymupdf.paper_size(paper_code)
+        target_rect = pymupdf.Rect(0, 0, target_pt_w, target_pt_h)
 
         # Pass 1: Detect per-page content bounding boxes
         raw_page_data = []
@@ -148,7 +148,7 @@ class EinkOptimizer:
                     y0 = max(page_rect.y0, min(page_rect.y1 - crop_h, cy - crop_h / 2.0))
                     x1 = min(page_rect.x1, x0 + crop_w)
                     y1 = min(page_rect.y1, y0 + crop_h)
-                    content_rect = fitz.Rect(x0, y0, x1, y1)
+                    content_rect = pymupdf.Rect(x0, y0, x1, y1)
             else:
                 page_w = page_rect.width
                 page_h = page_rect.height
@@ -162,10 +162,10 @@ class EinkOptimizer:
                 zoom_x = target_pix_w / content_rect.width
                 zoom_y = target_pix_h / content_rect.height
                 zoom = min(zoom_x, zoom_y)
-                mat = fitz.Matrix(zoom, zoom)
+                mat = pymupdf.Matrix(zoom, zoom)
 
                 # Render crop area to pixmap
-                pix = src_page.get_pixmap(matrix=mat, clip=content_rect, colorspace=fitz.csGRAY)
+                pix = src_page.get_pixmap(matrix=mat, clip=content_rect, colorspace=pymupdf.csGRAY)
                 img = Image.frombytes("L", (pix.width, pix.height), pix.samples)
 
                 # Enhance contrast
@@ -196,7 +196,7 @@ class EinkOptimizer:
 
                 offset_x = (page_w - disp_w) / 2.0
                 offset_y = (page_h - disp_h) / 2.0
-                dest_rect = fitz.Rect(offset_x, offset_y, offset_x + disp_w, offset_y + disp_h)
+                dest_rect = pymupdf.Rect(offset_x, offset_y, offset_x + disp_w, offset_y + disp_h)
 
                 new_page.insert_image(dest_rect, stream=img_bytes)
             else:
@@ -216,7 +216,7 @@ class EinkOptimizer:
 
                 pos_x = (page_w - final_w) / 2.0
                 pos_y = (page_h - final_h) / 2.0
-                dest_rect = fitz.Rect(pos_x, pos_y, pos_x + final_w, pos_y + final_h)
+                dest_rect = pymupdf.Rect(pos_x, pos_y, pos_x + final_w, pos_y + final_h)
 
                 # Place cropped source page vector content into new page
                 new_page.show_pdf_page(
@@ -277,14 +277,14 @@ class EinkOptimizer:
             return out_bytes, f"{title}.pdf"
 
         elif suffix in (".epub", ".mobi"):
-            import pymupdf as fitz
+            import pymupdf
             from quaderno_companion.config import settings
-            doc = fitz.open(str(path))
+            doc = pymupdf.open(str(path))
             meta_title = (doc.metadata or {}).get("title")
             if meta_title and meta_title.strip():
                 title = meta_title.strip()
             paper_code = "a5" if "A5" in self.profile.name else "a4"
-            target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+            target_pt_w, target_pt_h = pymupdf.paper_size(paper_code)
             if doc.is_reflowable:
                 if hasattr(doc, "apply_css"):
                     doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
@@ -295,8 +295,8 @@ class EinkOptimizer:
             return out_bytes, f"{title}.pdf"
 
         elif suffix in (".jpg", ".jpeg", ".png", ".webp"):
-            import pymupdf as fitz
-            img_doc = fitz.open(str(path))
+            import pymupdf
+            img_doc = pymupdf.open(str(path))
             pdf_bytes_tmp = img_doc.convert_to_pdf()
             img_doc.close()
             out_bytes = self.optimize_pdf(pdf_bytes_tmp, output_path=output_path)
@@ -409,14 +409,14 @@ class EinkOptimizer:
 
     def _detect_content_bbox(self, page: Any, margin_padding: float = 12.0) -> Any:
         """Find the bounding box of text, drawings, and images on a page."""
-        import pymupdf as fitz
+        import pymupdf
         page_rect = page.rect
-        bbox = fitz.Rect()
+        bbox = pymupdf.Rect()
 
         # 1. Fast text blocks detection
         try:
             for b in page.get_text("blocks"):
-                rect = fitz.Rect(b[:4])
+                rect = pymupdf.Rect(b[:4])
                 if not rect.is_empty:
                     bbox |= rect
         except Exception:
@@ -426,7 +426,7 @@ class EinkOptimizer:
         try:
             for item in page.get_bboxlog():
                 # item: (type, (x0, y0, x1, y1))
-                r = fitz.Rect(item[1])
+                r = pymupdf.Rect(item[1])
                 if not r.is_empty:
                     if r.width >= page_rect.width * 0.96 and r.height >= page_rect.height * 0.96:
                         continue
@@ -438,7 +438,7 @@ class EinkOptimizer:
             return page_rect
 
         # Expand bbox by safety margin, bounded by source page bounds
-        expanded = fitz.Rect(
+        expanded = pymupdf.Rect(
             max(page_rect.x0, bbox.x0 - margin_padding),
             max(page_rect.y0, bbox.y0 - margin_padding),
             min(page_rect.x1, bbox.x1 + margin_padding),

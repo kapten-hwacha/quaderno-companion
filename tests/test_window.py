@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from PIL import Image
 import pytest
-import pymupdf as fitz
+import pymupdf
 
 from quaderno_companion.triggers.window import capture_active_window_pdf, crop_to_aspect_ratio
 
@@ -38,7 +38,7 @@ def test_capture_active_window_pdf_full_screen(tmp_path):
         assert len(title) > 0
 
         # Verify PDF page geometry matches standard ISO A4 (595.0 x 842.0 pt)
-        doc = fitz.open(str(pdf_path))
+        doc = pymupdf.open(str(pdf_path))
         assert len(doc) == 1
         page = doc[0]
         assert round(page.rect.width, 1) == 595.0
@@ -72,7 +72,7 @@ def test_capture_active_window_pdf_portrait(tmp_path):
         pdf_path, filename, title = capture_active_window_pdf(profile_name="A4", auto_rotate=True)
         assert pdf_path.exists()
 
-        doc = fitz.open(str(pdf_path))
+        doc = pymupdf.open(str(pdf_path))
         assert len(doc) == 1
         page = doc[0]
         assert round(page.rect.width, 1) == 595.0

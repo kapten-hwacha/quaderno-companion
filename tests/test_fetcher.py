@@ -61,8 +61,8 @@ async def test_extract_article_from_html():
 
 @pytest.mark.asyncio
 async def test_full_pipeline_html_to_eink_pdf_integration(tmp_path: Path):
-    """Integration test: Ingest local HTML file through full fetch -> optimize pipeline and verify with fitz."""
-    import pymupdf as fitz
+    """Integration test: Ingest local HTML file through full fetch -> optimize pipeline and verify with pymupdf."""
+    import pymupdf
     from quaderno_companion.config import SCREEN_PROFILES
 
     html_file = tmp_path / "article.html"
@@ -91,7 +91,7 @@ async def test_full_pipeline_html_to_eink_pdf_integration(tmp_path: Path):
     assert doc.filename.endswith(".pdf")
 
     # Open with PyMuPDF and verify structure
-    pdf_doc = fitz.open(stream=doc.pdf_bytes, filetype="pdf")
+    pdf_doc = pymupdf.open(stream=doc.pdf_bytes, filetype="pdf")
     assert len(pdf_doc) >= 1
     page = pdf_doc[0]
     rect = page.rect

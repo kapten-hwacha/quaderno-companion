@@ -37,7 +37,6 @@ hidden_imports = [
     "python_multipart",
     # PDF, Images, Compression & Low-level
     "pymupdf",
-    "fitz",
     "PIL",
     "PIL.Image",
     "reportlab",

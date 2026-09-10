@@ -78,10 +78,10 @@ def extract_pdf_toc(pdf_bytes: bytes) -> List[Tuple[str, int]]:
     if not pdf_bytes:
         return []
     
-    # 1. Primary: Use PyMuPDF (fitz)
+    # 1. Primary: Use PyMuPDF
     try:
-        import pymupdf as fitz
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        import pymupdf
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
         toc = doc.get_toc()
         doc.close()
         if toc:
@@ -324,8 +324,8 @@ class QuadernoDeviceManager:
         total_pages = 1
         raw_toc = []
         try:
-            import pymupdf as fitz
-            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            import pymupdf
+            doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
             total_pages = max(1, doc.page_count)
             doc.close()
             raw_toc = extract_pdf_toc(pdf_bytes)

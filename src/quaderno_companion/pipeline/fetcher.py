@@ -229,14 +229,14 @@ class ContentFetcher:
                 or "application/x-mobipocket-ebook" in content_type
                 or url_lower.endswith((".epub", ".mobi"))
             ):
-                import pymupdf as fitz
+                import pymupdf
                 from quaderno_companion.config import settings
                 fmt = "epub" if ("epub" in content_type or url_lower.endswith(".epub")) else "mobi"
-                doc = fitz.open(stream=response.content, filetype=fmt)
+                doc = pymupdf.open(stream=response.content, filetype=fmt)
                 meta_title = (doc.metadata or {}).get("title")
                 title = custom_title or meta_title or self._extract_filename_from_url(source_url_or_path)
                 paper_code = "a5" if "A5" in self.optimizer.profile.name else "a4"
-                target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+                target_pt_w, target_pt_h = pymupdf.paper_size(paper_code)
                 if doc.is_reflowable:
                     if hasattr(doc, "apply_css"):
                         doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
@@ -288,14 +288,14 @@ class ContentFetcher:
             )
 
         elif suffix in (".epub", ".mobi"):
-            import pymupdf as fitz
+            import pymupdf
             from quaderno_companion.config import settings
-            doc = fitz.open(str(path))
+            doc = pymupdf.open(str(path))
             meta_title = (doc.metadata or {}).get("title")
             if (not custom_title or custom_title == path.stem) and meta_title and meta_title.strip():
                 title = meta_title.strip()
             paper_code = "a5" if "A5" in self.optimizer.profile.name else "a4"
-            target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+            target_pt_w, target_pt_h = pymupdf.paper_size(paper_code)
             if doc.is_reflowable:
                 if hasattr(doc, "apply_css"):
                     doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
@@ -314,8 +314,8 @@ class ContentFetcher:
             )
 
         elif suffix in (".jpg", ".jpeg", ".png", ".webp"):
-            import pymupdf as fitz
-            img_doc = fitz.open(str(path))
+            import pymupdf
+            img_doc = pymupdf.open(str(path))
             pdf_bytes_tmp = img_doc.convert_to_pdf()
             img_doc.close()
             if optimize_for_eink:

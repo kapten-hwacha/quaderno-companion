@@ -296,14 +296,14 @@ async def open_document(
             def _convert_and_optimize():
                 nonlocal raw_bytes, doc_title
                 if ext in (".epub", ".mobi"):
-                    import pymupdf as fitz
+                    import pymupdf
                     fmt = ext.lstrip(".")
-                    doc = fitz.open(stream=raw_bytes, filetype=fmt)
+                    doc = pymupdf.open(stream=raw_bytes, filetype=fmt)
                     meta_title = (doc.metadata or {}).get("title")
                     if (not title or title == Path(fname).stem) and meta_title and meta_title.strip():
                         doc_title = meta_title.strip()
                     paper_code = "a5" if "A5" in settings.default_profile else "a4"
-                    target_pt_w, target_pt_h = fitz.paper_size(paper_code)
+                    target_pt_w, target_pt_h = pymupdf.paper_size(paper_code)
                     if doc.is_reflowable:
                         if hasattr(doc, "apply_css"):
                             doc.apply_css(f"* {{ font-family: {settings.normalized_font_family} !important; }}")
@@ -311,9 +311,9 @@ async def open_document(
                     raw_bytes = doc.convert_to_pdf()
                     doc.close()
                 elif ext in (".jpg", ".jpeg", ".png", ".webp"):
-                    import pymupdf as fitz
+                    import pymupdf
                     fmt = ext.lstrip(".")
-                    doc = fitz.open(stream=raw_bytes, filetype=fmt)
+                    doc = pymupdf.open(stream=raw_bytes, filetype=fmt)
                     raw_bytes = doc.convert_to_pdf()
                     doc.close()
 

@@ -408,7 +408,7 @@ async def test_get_toc_fetches_from_device_and_caches(tmp_path):
 
 def test_extract_pdf_toc():
     """Verify extract_pdf_toc correctly extracts outlines from PDF bytes."""
-    import pymupdf as fitz
+    import pymupdf
     from quaderno_companion.device.manager import extract_pdf_toc
 
     # 1. Test empty bytes
@@ -416,7 +416,7 @@ def test_extract_pdf_toc():
     assert extract_pdf_toc(b"not a pdf") == []
 
     # 2. Create in-memory PDF with TOC bookmarks using PyMuPDF
-    doc = fitz.open()
+    doc = pymupdf.open()
     doc.new_page()  # Page 1
     doc.new_page()  # Page 2
     doc.new_page()  # Page 3
