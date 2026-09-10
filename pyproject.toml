@@ -43,3 +43,10 @@ dev = [
     "pyinstaller>=6.5.0",
 ]
 
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore:The `fitz` API is deprecated.*:DeprecationWarning",
+    "ignore:builtin type SwigPy.*:DeprecationWarning",
+    "ignore:builtin type swigvarlink.*:DeprecationWarning",
+    "ignore:pkg_resources is deprecated:DeprecationWarning",
+]

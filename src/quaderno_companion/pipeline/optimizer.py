@@ -236,10 +236,13 @@ class EinkOptimizer:
 
         doc.close()
 
-        # Compress output PDF streams for lightweight transmission
+        # Compress output PDF streams for lightweight transmission.
+        # NOTE: clean=False is critical. MuPDF's clean=True sanitization rewrites content streams
+        # and improperly alters transformation matrices (Tm/cm) and graphics states (q/Q) in LaTeX
+        # mathematical typesetting, causing equations, matrices, and text to collide and overlap.
         out_bytes = out_doc.tobytes(
             garbage=4,       # Remove unused objects
-            clean=True,      # Clean and sanitize content streams
+            clean=False,     # Do NOT rewrite content streams (preserves math equation matrices)
             deflate=True,    # Deflate uncompressed streams
             deflate_images=True,
             deflate_fonts=True,

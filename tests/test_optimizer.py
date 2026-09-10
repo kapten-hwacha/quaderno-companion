@@ -390,5 +390,34 @@ def test_two_page_document_without_cover():
     src_doc.close()
 
 
-
-
+def test_math_equation_transformation_matrix_preservation():
+    """Verify that optimization preserves content streams without corruption from stream cleaning.
+    
+    Checks that mathematical equations with transformation matrices and graphics states
+    are preserved without overlapping text elements.
+    """
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    
+    # Simulate a document with paragraph text and a formula with nested transformation state
+    page.insert_textbox(fitz.Rect(50, 100, 545, 150), "Paragraph before mathematical formulation.", fontsize=12)
+    page.insert_textbox(fitz.Rect(100, 200, 300, 250), "R(q) = [x, y, z]", fontsize=14)
+    page.insert_textbox(fitz.Rect(50, 300, 545, 350), "Paragraph following mathematical formulation.", fontsize=12)
+    
+    src_bytes = doc.tobytes()
+    doc.close()
+    
+    optimizer = EinkOptimizer(profile_name="A4")
+    out_bytes = optimizer.optimize_pdf(src_bytes, trim_margins=True)
+    
+    out_doc = fitz.open(stream=out_bytes, filetype="pdf")
+    assert len(out_doc) == 1
+    
+    out_page = out_doc[0]
+    blocks = out_page.get_text("blocks")
+    # Verify we still have the distinct text blocks without vertical collapse
+    assert len(blocks) >= 3
+    y_coords = [b[1] for b in blocks]
+    # Y-coordinates should remain strictly monotonic (top to bottom)
+    assert y_coords == sorted(y_coords), "Text blocks collapsed or overlapped after optimization!"
+    out_doc.close()

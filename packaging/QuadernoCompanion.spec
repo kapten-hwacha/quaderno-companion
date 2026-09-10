@@ -36,6 +36,7 @@ hidden_imports = [
     "pydantic_settings",
     "python_multipart",
     # PDF, Images, Compression & Low-level
+    "pymupdf",
     "fitz",
     "PIL",
     "PIL.Image",
