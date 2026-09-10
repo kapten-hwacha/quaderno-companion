@@ -148,6 +148,16 @@ class Settings(BaseSettings):
         description="Optional API key for daemon authentication. If set, clients must pass X-API-Key or Bearer token.",
     )
 
+    # Gemini AI OCR Configuration
+    gemini_api_key: Optional[str] = Field(
+        default=None,
+        description="Google Gemini API key for handwritten notes & math transcription.",
+    )
+    gemini_model: str = Field(
+        default="gemini-2.5-flash-lite",
+        description="Gemini model for handwriting & math OCR (e.g. gemini-2.5-flash-lite, gemini-2.0-flash-lite).",
+    )
+
     # FastAPI Server
     server_host: str = Field(default="127.0.0.1")
     server_port: int = Field(default=5000)
@@ -200,6 +210,17 @@ class Settings(BaseSettings):
             pass
 
         return generated
+
+    def resolve_gemini_api_key(self) -> Optional[str]:
+        """Resolve Gemini API key from settings, environment, or .env file."""
+        if self.gemini_api_key and self.gemini_api_key.strip():
+            return self.gemini_api_key.strip()
+        import os
+        for env_var in ("QUADERNO_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+            val = os.environ.get(env_var)
+            if val and val.strip():
+                return val.strip()
+        return None
 
     def ensure_directories(self) -> None:
         """Create necessary config, cache, and sync directories with safe permissions."""

@@ -531,6 +531,76 @@ async def agent_chat(req: AgentChatRequest):
 
 
 @app.post(
+    "/api/documents/transcribe",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def transcribe_document(
+    file: Optional[UploadFile] = File(None),
+    doc_path: Optional[str] = Form(None),
+    pages: Optional[str] = Form(None),
+    all_pages: bool = Form(False),
+    model: Optional[str] = Form(None),
+):
+    """Transcribe handwritten notes and math formulas from a PDF file using Gemini."""
+    from quaderno_companion.pipeline.transcriber import transcribe_pdf
+
+    target_path: Optional[Path] = None
+    temp_file: Optional[Path] = None
+
+    try:
+        if file and file.filename:
+            # Save uploaded PDF to a temporary cache file
+            safe_name = Path(file.filename).name
+            temp_file = settings.cache_dir / f"transcribe_{int(time.time())}_{safe_name}"
+            content = await file.read()
+            if len(content) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="File too large (max 100 MB).")
+            temp_file.write_bytes(content)
+            target_path = temp_file
+        elif doc_path:
+            p = Path(doc_path).expanduser().resolve()
+            if not p.exists():
+                raise HTTPException(status_code=404, detail=f"Document not found: {doc_path}")
+            target_path = p
+        else:
+            # Fallback: check active reading document in synced folder
+            state = device_manager._reading_state or device_manager.get_reading_state()
+            if state and state.document_id:
+                title = state.title or "active_document"
+                candidate = settings.sync_dir / f"{title}.pdf"
+                if candidate.exists():
+                    target_path = candidate
+
+        if not target_path or not target_path.exists():
+            raise HTTPException(
+                status_code=400,
+                detail="No document provided. Upload a PDF file or provide a valid 'doc_path'.",
+            )
+
+        parsed_pages = None
+        if pages:
+            try:
+                parsed_pages = [int(p.strip()) for p in pages.split(",") if p.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid 'pages' format. Expected comma-separated integers.")
+
+        res = await transcribe_pdf(
+            pdf_path=target_path,
+            pages=parsed_pages,
+            only_annotated=not all_pages,
+            model=model,
+        )
+        return res
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Transcription error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
+
+@app.post(
     "/api/sync",
     dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
 )

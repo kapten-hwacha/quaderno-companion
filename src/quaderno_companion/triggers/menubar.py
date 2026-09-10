@@ -34,10 +34,18 @@ except Exception:
         class MenuItem:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
                 self.title = args[0] if args else ""
+                self._enabled = True
             def add(self, *args: Any, **kwargs: Any) -> None:
                 pass
             def clear(self) -> None:
                 pass
+            def setEnabled_(self, val: bool) -> None:
+                self._enabled = val
+            def isEnabled(self) -> bool:
+                return self._enabled
+            @property
+            def _menuitem(self) -> Any:
+                return self
         class App:
             def __init__(self, *args: Any, **kwargs: Any) -> None:
                 self.menu: Any = []
@@ -437,6 +445,10 @@ class QuadernoMenubarApp(AppBase):
         self.other_push_menu.add(rumps.MenuItem("👁️ Push from Preview", callback=self.push_preview))
         self.other_push_menu.add(rumps.MenuItem("🔗 Push URL...", callback=self.push_url_dialog))
 
+        self.transcribe_menu = rumps.MenuItem("📝 Transcribe Notes (OCR)...")
+        self.transcribe_menu.add(rumps.MenuItem("📁 Choose Local PDF...", callback=self.choose_and_transcribe_file))
+        self.transcribe_menu.add(rumps.MenuItem("📄 Transcribe Active Document", callback=self.transcribe_active_doc))
+
         self.queue_menu = rumps.MenuItem("Queued Files (0)")
         self._update_queue_menu()
 
@@ -448,6 +460,7 @@ class QuadernoMenubarApp(AppBase):
             self.push_file_item,
             self.open_folder_item,
             self.other_push_menu,
+            self.transcribe_menu,
             self.queue_menu,
             None,  # Separator
             self.status_item,
@@ -524,15 +537,31 @@ class QuadernoMenubarApp(AppBase):
                 items = push_queue.list_items()
                 count = len(items)
                 self.queue_menu.title = f"Queued Files ({count})"
+
+                # Gray out / disable the queue menu when queue is empty
+                if hasattr(self.queue_menu, "_menuitem") and hasattr(self.queue_menu._menuitem, "setEnabled_"):
+                    self.queue_menu._menuitem.setEnabled_(count > 0)
+
                 try:
                     self.queue_menu.clear()
                 except Exception:
                     pass
-                self.queue_menu.add(rumps.MenuItem("⚡ Push Queue Now", callback=self.flush_queue_manually))
-                self.queue_menu.add(rumps.MenuItem("🗑️ Clear Queue", callback=self.clear_queue_manually))
+
+                push_item = rumps.MenuItem("⚡ Push Queue Now", callback=self.flush_queue_manually if count > 0 else None)
+                clear_item = rumps.MenuItem("🗑️ Clear Queue", callback=self.clear_queue_manually if count > 0 else None)
+                if hasattr(push_item, "_menuitem") and hasattr(push_item._menuitem, "setEnabled_"):
+                    push_item._menuitem.setEnabled_(count > 0)
+                if hasattr(clear_item, "_menuitem") and hasattr(clear_item._menuitem, "setEnabled_"):
+                    clear_item._menuitem.setEnabled_(count > 0)
+
+                self.queue_menu.add(push_item)
+                self.queue_menu.add(clear_item)
                 self.queue_menu.add(None)
                 if not items:
-                    self.queue_menu.add(rumps.MenuItem("(No files queued)"))
+                    empty_item = rumps.MenuItem("(No files queued)")
+                    if hasattr(empty_item, "_menuitem") and hasattr(empty_item._menuitem, "setEnabled_"):
+                        empty_item._menuitem.setEnabled_(False)
+                    self.queue_menu.add(empty_item)
                 else:
                     for item in items[:10]:
                         display = f"{item.title} ({item.remote_folder})"
@@ -931,6 +960,61 @@ class QuadernoMenubarApp(AppBase):
         )
         if url:
             self._execute_push_or_summarize(target=url)
+
+    def choose_and_transcribe_file(self, _=None):
+        """Open native macOS file dialog to pick and transcribe a PDF with handwriting."""
+        script = 'POSIX path of (choose file of type {"pdf"} with prompt "Choose PDF to Transcribe Handwritten Notes")'
+        try:
+            out = subprocess.check_output(["osascript", "-e", script], text=True).strip()
+            if out:
+                self._execute_transcribe(Path(out))
+        except Exception:
+            pass  # User cancelled dialog
+
+    def transcribe_active_doc(self, _=None):
+        """Transcribe the currently active Quaderno document if available in sync directory."""
+        reading_state = getattr(self, "_last_reading_state", None) or getattr(device_manager, "_reading_state", None)
+        if not reading_state or not reading_state.document_id:
+            show_alert("No Active Document", "No active document currently open on Quaderno.")
+            return
+
+        title = reading_state.title or "active_document"
+        candidate = settings.sync_dir / f"{title}.pdf"
+        if candidate.exists():
+            self._execute_transcribe(candidate)
+        else:
+            show_alert(
+                "Document Not Found in Sync",
+                f"Active document '{title}.pdf' is not yet downloaded to local sync folder ({settings.sync_dir}). Please run sync first.",
+            )
+
+    def _execute_transcribe(self, pdf_path: Path):
+        """Execute handwriting transcription in background worker."""
+        from quaderno_companion.pipeline.transcriber import transcribe_pdf
+
+        async def _run():
+            notify("Quaderno Companion", "Transcribing Notes...", f"Processing '{pdf_path.name}' with Gemini...")
+            try:
+                res = await transcribe_pdf(pdf_path=pdf_path)
+                out_path = res.get("output_file")
+                pages_count = len(res.get("pages", []))
+                notify(
+                    "Quaderno Companion",
+                    "Transcription Complete",
+                    f"Transcribed {pages_count} page(s) to '{Path(out_path).name}'.",
+                )
+                if out_path and Path(out_path).exists():
+                    try:
+                        subprocess.run(["open", "-R", str(out_path)], check=False)
+                    except Exception:
+                        pass
+            except ValueError as ve:
+                show_alert("Transcription Config Error", str(ve))
+            except Exception as e:
+                logger.error(f"Transcription error: {e}", exc_info=True)
+                show_alert("Transcription Failed", str(e))
+
+        bg_worker.submit(_run())
 
     def nav_next(self, _):
         """Advance page on Quaderno."""

@@ -352,16 +352,22 @@ def test_menubar_queue_integration(tmp_path):
             app = QuadernoMenubarApp()
 
         assert app.queue_menu.title == "Queued Files (0)"
+        if hasattr(app.queue_menu, "_menuitem") and hasattr(app.queue_menu._menuitem, "isEnabled"):
+            assert app.queue_menu._menuitem.isEnabled() is False
 
         # Enqueue an item and update menu
         push_queue.enqueue_bytes(b"%PDF dummy", "offline.pdf", title="Offline Doc")
         app._update_queue_menu()
         assert app.queue_menu.title == "Queued Files (1)"
+        if hasattr(app.queue_menu, "_menuitem") and hasattr(app.queue_menu._menuitem, "isEnabled"):
+            assert app.queue_menu._menuitem.isEnabled() is True
 
         # Clear queue via menubar
         app.clear_queue_manually()
         assert push_queue.count() == 0
         assert app.queue_menu.title == "Queued Files (0)"
+        if hasattr(app.queue_menu, "_menuitem") and hasattr(app.queue_menu._menuitem, "isEnabled"):
+            assert app.queue_menu._menuitem.isEnabled() is False
 
         # Test offline push catches disconnect and enqueues
         with patch("quaderno_companion.triggers.menubar.tool_push_document", side_effect=DeviceNotConnectedError("Quaderno offline")), \
@@ -385,3 +391,33 @@ def test_menubar_queue_integration(tmp_path):
     finally:
         settings.config_dir = original_config
         settings.cache_dir = original_cache
+
+
+def test_menubar_transcribe_actions(tmp_path):
+    """Verify menubar transcribe menu initialization and execution flow."""
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    assert app.transcribe_menu is not None
+    assert app.transcribe_menu.title == "📝 Transcribe Notes (OCR)..."
+
+    test_pdf = tmp_path / "notes.pdf"
+    test_pdf.write_bytes(b"%PDF dummy")
+
+    mock_res = {
+        "status": "success",
+        "output_file": str(tmp_path / "notes_transcribed.md"),
+        "pages": [1],
+        "content": "# Notes",
+    }
+
+    with patch("quaderno_companion.pipeline.transcriber.transcribe_pdf", new_callable=AsyncMock) as mock_transcribe, \
+         patch("quaderno_companion.triggers.menubar.notify") as mock_notify, \
+         patch("subprocess.run") as mock_open:
+        mock_transcribe.return_value = mock_res
+        app._execute_transcribe(test_pdf)
+        # Wait a tick for background worker execution
+        import time
+        time.sleep(0.2)
+
+        mock_notify.assert_any_call("Quaderno Companion", "Transcribing Notes...", "Processing 'notes.pdf' with Gemini...")

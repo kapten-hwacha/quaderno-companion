@@ -313,8 +313,34 @@ def test_open_document_with_destination_folder():
         )
 
 
+def test_transcribe_document_endpoint(tmp_path):
+    """Verify POST /api/documents/transcribe endpoint."""
+    test_pdf = tmp_path / "notes.pdf"
+    test_pdf.write_bytes(b"%PDF-1.4 mock")
 
+    mock_result = {
+        "status": "success",
+        "source_file": str(test_pdf),
+        "output_file": str(tmp_path / "notes_transcribed.md"),
+        "pages": [1],
+        "total_pages": 1,
+        "model": "gemini-2.5-flash-lite",
+        "content": "# Notes\nFormula: $x^2 + y^2 = r^2$",
+    }
 
-
-
-
+    with patch("quaderno_companion.pipeline.transcriber.transcribe_pdf", new_callable=AsyncMock) as mock_transcribe:
+        mock_transcribe.return_value = mock_result
+        res = client.post(
+            "/api/documents/transcribe",
+            data={"doc_path": str(test_pdf), "pages": "1"},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert "Formula: $x^2 + y^2 = r^2$" in data["content"]
+        mock_transcribe.assert_called_once_with(
+            pdf_path=test_pdf,
+            pages=[1],
+            only_annotated=True,
+            model=None,
+        )

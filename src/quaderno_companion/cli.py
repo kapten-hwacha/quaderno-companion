@@ -584,6 +584,102 @@ def optimize(
     rprint(f"[bold green]✓[/bold green] Optimized PDF saved to [cyan]{output_pdf}[/cyan] ({len(out_bytes)/1024:.1f} KB)")
 
 
+@app.command(name="transcribe")
+def transcribe_cmd(
+    pdf_file: Optional[Path] = typer.Argument(None, help="Path to PDF file containing handwritten notes (defaults to active doc if omitted)"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Custom output Markdown file path"),
+    pages: Optional[str] = typer.Option(None, "--pages", "-p", help="Comma-separated page numbers to transcribe (e.g. '1,3,5')"),
+    all_pages: bool = typer.Option(False, "--all", "-a", help="Transcribe all pages instead of only annotated pages"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Gemini model override (e.g. gemini-2.5-flash-lite)"),
+    stdout: bool = typer.Option(False, "--stdout", help="Print transcribed Markdown directly to terminal stdout"),
+):
+    """Transcribe handwritten notes and math from a PDF to Markdown + LaTeX using Gemini."""
+    from quaderno_companion.pipeline.transcriber import transcribe_pdf
+
+    target_pdf = pdf_file
+
+    # If no file provided, attempt to locate active document in sync folder
+    if not target_pdf:
+        state = device_manager._reading_state or device_manager.get_reading_state()
+        if state and state.document_id:
+            # Look for active doc in synced storage
+            title = state.title or "active_document"
+            candidate = settings.sync_dir / f"{title}.pdf"
+            if candidate.exists():
+                target_pdf = candidate
+                rprint(f"[cyan]Using active Quaderno document:[/cyan] [bold]{candidate}[/bold]")
+
+    if not target_pdf:
+        rprint("[bold red]Error:[/bold red] Please specify a PDF file: [cyan]quadctl transcribe <path_to_pdf>[/cyan]")
+        sys.exit(1)
+
+    if not target_pdf.exists():
+        rprint(f"[bold red]File not found:[/bold red] {target_pdf}")
+        sys.exit(1)
+
+    parsed_pages = None
+    if pages:
+        try:
+            parsed_pages = [int(p.strip()) for p in pages.split(",") if p.strip()]
+        except ValueError:
+            rprint(f"[bold red]Invalid --pages format:[/bold red] '{pages}'. Expected comma-separated integers (e.g. '1,2,5').")
+            sys.exit(1)
+
+    async def _run():
+        with console.status(f"[bold cyan]Transcribing handwritten notes from '{target_pdf.name}' with Gemini..."):
+            try:
+                res = await transcribe_pdf(
+                    pdf_path=target_pdf,
+                    output_path=output,
+                    pages=parsed_pages,
+                    only_annotated=not all_pages,
+                    model=model,
+                )
+            except ValueError as ve:
+                rprint(f"[bold red]Configuration Error:[/bold red] {ve}")
+                sys.exit(1)
+            except Exception as e:
+                rprint(f"[bold red]Transcription failed:[/bold red] {e}")
+                sys.exit(1)
+
+        if stdout:
+            console.print(res["content"])
+        else:
+            rprint(
+                Panel(
+                    f"[bold green]✓ Transcription Complete[/bold green]\n\n"
+                    f"• [bold]Source File:[/bold] {res['source_file']}\n"
+                    f"• [bold]Output Markdown:[/bold] [cyan]{res['output_file']}[/cyan]\n"
+                    f"• [bold]Pages Transcribed:[/bold] {res['pages']} (of {res['total_pages']})\n"
+                    f"• [bold]Model:[/bold] {res['model']}",
+                    title="Handwritten Notes OCR",
+                    border_style="green",
+                )
+            )
+
+    run_async(_run())
+
+
+@app.command(name="ocr", hidden=True)
+def ocr_alias(
+    pdf_file: Optional[Path] = typer.Argument(None, help="Path to PDF file containing handwritten notes"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Custom output Markdown file path"),
+    pages: Optional[str] = typer.Option(None, "--pages", "-p", help="Comma-separated page numbers to transcribe"),
+    all_pages: bool = typer.Option(False, "--all", "-a", help="Transcribe all pages instead of only annotated pages"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Gemini model override"),
+    stdout: bool = typer.Option(False, "--stdout", help="Print transcribed Markdown directly to terminal stdout"),
+):
+    """Alias for `quadctl transcribe`."""
+    transcribe_cmd(
+        pdf_file=pdf_file,
+        output=output,
+        pages=pages,
+        all_pages=all_pages,
+        model=model,
+        stdout=stdout,
+    )
+
+
 @app.command(name="sync")
 def sync_cmd(
     path: Optional[Path] = typer.Option(None, "--path", "-p", help="Custom local directory to sync (defaults to ~/Quaderno)"),
