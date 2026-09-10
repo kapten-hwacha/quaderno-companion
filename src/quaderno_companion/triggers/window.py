@@ -223,7 +223,6 @@ def capture_active_window_pdf(
     img.close()
 
     # Save to user cache PDF file
-    import os
     settings.ensure_directories()
     clean_slug = "".join(c if c.isalnum() else "_" for c in display_title[:30]).strip("_")
     filename = f"Window_{int(time.time())}_{clean_slug}.pdf"
