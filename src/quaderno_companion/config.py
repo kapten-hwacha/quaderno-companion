@@ -2,7 +2,7 @@
 
 from pathlib import Path
 from typing import Dict, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -151,11 +151,25 @@ class Settings(BaseSettings):
     # Gemini AI OCR Configuration
     gemini_api_key: Optional[str] = Field(
         default=None,
+        validation_alias=AliasChoices(
+            "QUADERNO_GEMINI_API_KEY",
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "quaderno_gemini_api_key",
+            "gemini_api_key",
+        ),
         description="Google Gemini API key for handwritten notes & math transcription.",
     )
     gemini_model: str = Field(
         default="gemini-2.5-flash-lite",
-        description="Gemini model for handwriting & math OCR (e.g. gemini-2.5-flash-lite, gemini-2.0-flash-lite).",
+        validation_alias=AliasChoices(
+            "QUADERNO_GEMINI_MODEL",
+            "QUADERNO_LLM_MODEL",
+            "GEMINI_MODEL",
+            "quaderno_gemini_model",
+            "gemini_model",
+        ),
+        description="Gemini model for handwriting & math OCR (e.g. gemini-2.5-flash-lite, gemini-2.0-flash-lite, gemini-3.5-flash-lite).",
     )
 
     # FastAPI Server
@@ -220,6 +234,29 @@ class Settings(BaseSettings):
             val = os.environ.get(env_var)
             if val and val.strip():
                 return val.strip()
+
+        # Fallback: scan candidate .env files directly
+        candidate_paths = [
+            self.config_dir / ".env",
+            Path.home() / ".config" / "quaderno" / ".env",
+            Path.cwd() / ".env",
+            Path(__file__).resolve().parents[3] / ".env",
+        ]
+        for p in candidate_paths:
+            if p.is_file():
+                try:
+                    for line in p.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            k, v = line.split("=", 1)
+                            k, v = k.strip(), v.strip().strip("'\"")
+                            if k in ("QUADERNO_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY") and v:
+                                self.gemini_api_key = v
+                                return v
+                except Exception:
+                    pass
         return None
 
     def ensure_directories(self) -> None:
