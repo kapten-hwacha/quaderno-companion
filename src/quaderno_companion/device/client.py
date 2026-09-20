@@ -484,24 +484,29 @@ class QuadernoClient:
         dp = self._ensure_dp_instance()
         return await asyncio.to_thread(lambda: self._run_with_reauth(dp.get_storage))
 
+    def get_recent_document_sync(self) -> Optional[Dict[str, Any]]:
+        """Fetch the most recently read document metadata synchronously directly from Quaderno hardware."""
+        if not self._is_authenticated:
+            try:
+                self.authenticate_sync()
+            except Exception:
+                return None
+
+        dp = self._ensure_dp_instance()
+        try:
+            r = self._run_sync_with_reauth(lambda: dp._get_endpoint("/documents2?limit=1&sort_by=reading_date"))
+            if r.status_code == 200:
+                entries = r.json().get("entry_list", [])
+                return entries[0] if entries else None
+        except Exception:
+            pass
+        return None
+
     async def get_recent_document(self) -> Optional[Dict[str, Any]]:
         """Fetch the most recently read document metadata directly from Quaderno hardware."""
         if not self._is_authenticated:
             await self.authenticate()
-
-        dp = self._ensure_dp_instance()
-
-        def _get():
-            try:
-                r = self._run_with_reauth(lambda: dp._get_endpoint("/documents2?limit=1&sort_by=reading_date"))
-                if r.status_code == 200:
-                    entries = r.json().get("entry_list", [])
-                    return entries[0] if entries else None
-            except Exception:
-                pass
-            return None
-
-        return await asyncio.to_thread(_get)
+        return await asyncio.to_thread(self.get_recent_document_sync)
 
     async def take_screenshot(self) -> bytes:
         """Capture live screenshot of Quaderno screen as JPEG bytes."""

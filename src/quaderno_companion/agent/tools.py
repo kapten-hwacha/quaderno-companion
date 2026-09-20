@@ -167,6 +167,26 @@ async def tool_get_reading_state() -> ReadingStateResult:
     }
 
 
+class CopyActivePageParams(BaseModel):
+    page: Optional[int] = Field(
+        default=None,
+        description="Optional specific page number to copy. Defaults to currently open page.",
+    )
+    from_screen: bool = Field(
+        default=False,
+        description="If true, captures live physical screen screenshot instead of rendering PDF page.",
+    )
+
+
+async def tool_copy_active_page(
+    page: Optional[int] = None,
+    from_screen: bool = False,
+) -> Dict[str, Any]:
+    """Copies the currently open page (or live screen) of the active Quaderno document to the computer's clipboard as an image."""
+    from quaderno_companion.triggers.clipboard import copy_active_page_to_clipboard
+    return await copy_active_page_to_clipboard(page=page, from_screen=from_screen)
+
+
 # ---------------- Tool Registry & Schema ----------------
 
 TOOL_DEFINITIONS = [
@@ -188,10 +208,18 @@ TOOL_DEFINITIONS = [
         "parameters": {"type": "object", "properties": {}},
         "handler": tool_get_reading_state,
     },
+    {
+        "name": "copy_active_page",
+        "description": "Copies the currently open page of the active Quaderno document (or live screen) to the computer clipboard as an image.",
+        "parameters": CopyActivePageParams.model_json_schema(),
+        "handler": tool_copy_active_page,
+    },
 ]
 
 TOOL_MAP: Dict[str, Any] = {
     "push_document": tool_push_document,
     "navigate_reader": tool_navigate_reader,
     "get_reading_state": tool_get_reading_state,
+    "copy_active_page": tool_copy_active_page,
 }
+

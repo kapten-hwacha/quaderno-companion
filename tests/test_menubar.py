@@ -421,3 +421,43 @@ def test_menubar_transcribe_actions(tmp_path):
         time.sleep(0.2)
 
         mock_notify.assert_any_call("Quaderno Companion", "Transcribing Notes...", "Processing 'notes.pdf' with Gemini...")
+
+
+def test_menubar_copy_page_actions():
+    """Verify menubar copy page and copy screen menu initialization and callback dispatch."""
+    import time
+    with patch("rumps.Timer"):
+        app = QuadernoMenubarApp()
+
+    assert app.copy_menu is not None
+    assert "Copy to Clipboard" in app.copy_menu.title
+    assert app.copy_page_item is not None
+    assert "Active Page" in app.copy_page_item.title
+    assert app.copy_screen_item is not None
+    assert "Device Screen" in app.copy_screen_item.title
+
+    mock_res_page = {
+        "status": "success",
+        "title": "Article",
+        "page": 3,
+        "total_pages": 12,
+        "format": "png",
+        "size_bytes": 1024,
+    }
+
+    with patch("quaderno_companion.triggers.clipboard.copy_active_page_to_clipboard", new_callable=AsyncMock) as mock_copy, \
+         patch("quaderno_companion.triggers.menubar.notify") as mock_notify:
+        mock_copy.return_value = mock_res_page
+
+        app.copy_active_page()
+        time.sleep(0.2)
+        mock_copy.assert_called_with(from_screen=False)
+        mock_notify.assert_any_call("Quaderno Companion", "Copying Page...", "Rendering active page for clipboard...")
+
+        mock_copy.reset_mock()
+        mock_notify.reset_mock()
+
+        app.copy_device_screen()
+        time.sleep(0.2)
+        mock_copy.assert_called_with(from_screen=True)
+        mock_notify.assert_any_call("Quaderno Companion", "Capturing Screen...", "Snapping live Quaderno screen...")

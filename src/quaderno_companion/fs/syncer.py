@@ -167,8 +167,14 @@ class QuadernoSyncer:
         except Exception as e:
             logger.error(f"Failed to save sync state: {e}")
 
-    def sync_pass(self, client: Optional[Any] = None) -> SyncResult:
-        """Execute one bidirectional synchronization pass."""
+    def sync_pass(self, client: Optional[Any] = None, defer_active_document: bool = False) -> SyncResult:
+        """Execute one bidirectional synchronization pass.
+
+        Args:
+            client: Optional authenticated Quaderno client.
+            defer_active_document: If True, avoids downloading/pulling the currently
+                open reading document to prevent Quaderno OS file locking and pen freezes.
+        """
         result = SyncResult()
         self.sync_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,6 +194,25 @@ class QuadernoSyncer:
             return result
 
         state = self._load_state()
+
+        # Identify active reading document on Quaderno to defer during background sync
+        active_doc_id: Optional[str] = None
+        if defer_active_document:
+            try:
+                if hasattr(client, "get_recent_document_sync"):
+                    recent = client.get_recent_document_sync()
+                    if recent and recent.get("entry_id"):
+                        active_doc_id = str(recent["entry_id"])
+
+                if not active_doc_id:
+                    if hasattr(device_manager, "_load_persisted_state"):
+                        device_manager._load_persisted_state()
+                    if getattr(device_manager, "_reading_state", None) and device_manager._reading_state.document_id:
+                        active_doc_id = str(device_manager._reading_state.document_id)
+                if active_doc_id:
+                    logger.debug(f"Active reading document identified for background sync deferral: {active_doc_id}")
+            except Exception as e:
+                logger.debug(f"Could not resolve active reading document for deferral: {e}")
 
         # 1. Fetch Remote File & Folder Map
         try:
@@ -296,6 +321,7 @@ class QuadernoSyncer:
                 continue
 
             prev_state = state.get(rel_path, {})
+            is_active_reading_doc = bool(defer_active_document and active_doc_id and doc_id == active_doc_id)
 
             if not local_path.exists():
                 # Check if deleted locally after previously being synced
@@ -311,6 +337,10 @@ class QuadernoSyncer:
                         err = f"Failed to delete remote document '{rel_path}': {e}"
                         logger.error(err)
                         result.errors.append(err)
+
+                if is_active_reading_doc:
+                    logger.debug(f"Deferring initial download of active document '{rel_path}' to prevent pen lock.")
+                    continue
 
                 # Download new remote document
                 try:
@@ -356,6 +386,10 @@ class QuadernoSyncer:
                 local_changed = (loc_sha != prev_state.get("local_sha256"))
 
                 if remote_changed and not local_changed:
+                    if is_active_reading_doc:
+                        logger.debug(f"Deferring pull update of active document '{rel_path}' to prevent pen lock.")
+                        continue
+
                     # Download remote update
                     try:
                         _download_remote_to_file(client, doc_id, local_path, mtime=r_mtime)
@@ -398,6 +432,10 @@ class QuadernoSyncer:
                         result.errors.append(err)
 
                 elif remote_changed and local_changed:
+                    if is_active_reading_doc:
+                        logger.debug(f"Deferring conflict download of active document '{rel_path}' to prevent pen lock.")
+                        continue
+
                     # Conflict: download remote copy with timestamp suffix, push local file
                     try:
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -558,7 +596,7 @@ class QuadernoSyncRunner:
             logger.info(f"Started Quaderno background folder sync (interval: {self.interval}s)")
             while not self._stop_event.is_set():
                 try:
-                    res = self.syncer.sync_pass()
+                    res = self.syncer.sync_pass(defer_active_document=True)
                     self.last_result = res
                     if res.pulled or res.pushed or res.deleted:
                         logger.info(

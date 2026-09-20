@@ -248,3 +248,34 @@ def test_syncer_stat_cache_fast_path(tmp_path, mock_quaderno_client):
         assert mock_hash.call_count == 0
 
 
+def test_syncer_defer_active_document(tmp_path, mock_quaderno_client):
+    """Verify background sync pass defers pulling the active reading document to avoid pen lock."""
+    sync_dir = tmp_path / "sync_folder"
+    state_file = tmp_path / "state.json"
+
+    syncer = QuadernoSyncer(sync_dir=sync_dir, state_path=state_file)
+    # Initial pass pulls files
+    syncer.sync_pass(client=mock_quaderno_client, defer_active_document=False)
+    assert (sync_dir / "control_systems.pdf").exists()
+
+    # Remote document is modified (e.g. handwritten strokes on device)
+    mock_quaderno_client.list_all_documents.return_value = [
+        {"entry_id": "root", "entry_name": "Document", "entry_path": "Document", "entry_type": "folder"},
+        {"entry_id": "doc-1", "entry_name": "control_systems.pdf", "entry_path": "Document/control_systems.pdf", "entry_type": "document", "file_size": 2500, "modified_date": "2026-08-16T10:05:00Z"},
+    ]
+    mock_quaderno_client.get_recent_document_sync.return_value = {
+        "entry_id": "doc-1",
+        "entry_name": "control_systems.pdf",
+    }
+    mock_quaderno_client.download_document.reset_mock()
+
+    # Background pass with defer_active_document=True should skip pulling doc-1
+    res_bg = syncer.sync_pass(client=mock_quaderno_client, defer_active_document=True)
+    assert "control_systems.pdf" not in res_bg.pulled
+
+    # Manual pass with defer_active_document=False SHOULD pull doc-1
+    res_manual = syncer.sync_pass(client=mock_quaderno_client, defer_active_document=False)
+    assert "control_systems.pdf" in res_manual.pulled
+
+
+

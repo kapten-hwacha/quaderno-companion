@@ -344,3 +344,52 @@ def test_transcribe_document_endpoint(tmp_path):
             only_annotated=True,
             model=None,
         )
+
+
+def test_copy_page_endpoint():
+    """Verify POST /api/viewer/copy-page endpoint."""
+    mock_res = {
+        "status": "success",
+        "message": "Copied page 2 of 'TestDoc' to clipboard.",
+        "title": "TestDoc",
+        "page": 2,
+        "total_pages": 10,
+        "from_screen": False,
+        "format": "png",
+        "size_bytes": 2048,
+    }
+
+    with patch("quaderno_companion.triggers.clipboard.copy_active_page_to_clipboard", new_callable=AsyncMock) as mock_copy:
+        mock_copy.return_value = mock_res
+        res = client.post(
+            "/api/viewer/copy-page",
+            json={"page": 2, "from_screen": False, "dpi": 200},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["title"] == "TestDoc"
+        assert data["page"] == 2
+        mock_copy.assert_called_once_with(page=2, dpi=200, from_screen=False)
+
+
+def test_get_page_image_endpoint():
+    """Verify GET /api/viewer/page/image endpoint."""
+    sample_png = b"\x89PNG\r\n\x1a\n\x00mock_image_bytes"
+    mock_meta = {
+        "document_id": "doc-1",
+        "title": "TestDoc",
+        "page": 1,
+        "total_pages": 5,
+        "from_screen": False,
+        "format": "png",
+    }
+
+    with patch("quaderno_companion.triggers.clipboard.get_active_page_image", new_callable=AsyncMock) as mock_get_img:
+        mock_get_img.return_value = (sample_png, "png", mock_meta)
+        res = client.get("/api/viewer/page/image?page=1&dpi=150")
+        assert res.status_code == 200
+        assert res.headers["content-type"] == "image/png"
+        assert res.content == sample_png
+        mock_get_img.assert_called_once_with(page=1, dpi=150, from_screen=False)
+

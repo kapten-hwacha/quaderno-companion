@@ -437,6 +437,12 @@ class QuadernoMenubarApp(AppBase):
         self._sync_in_progress = False
         self._telemetry_in_progress = False
 
+        self.copy_menu = rumps.MenuItem("📋 Copy to Clipboard")
+        self.copy_page_item = rumps.MenuItem("📄 Active Page (High-Res Render)", callback=self.copy_active_page)
+        self.copy_screen_item = rumps.MenuItem("📷 Device Screen (Live Screenshot)", callback=self.copy_device_screen)
+        self.copy_menu.add(self.copy_page_item)
+        self.copy_menu.add(self.copy_screen_item)
+
         self.push_file_item = rumps.MenuItem("📁 Push Local File...", callback=self.choose_and_push_file)
         self.other_push_menu = rumps.MenuItem("Other Push Options")
         self.other_push_menu.add(rumps.MenuItem("🌐 Push Active Browser Tab", callback=self.push_browser_tab))
@@ -457,6 +463,7 @@ class QuadernoMenubarApp(AppBase):
             self.page_slider_item,
             self.watch_mode_item,
             None,  # Separator (unified scroller handles navigation and chapters)
+            self.copy_menu,
             self.push_file_item,
             self.open_folder_item,
             self.other_push_menu,
@@ -1013,6 +1020,47 @@ class QuadernoMenubarApp(AppBase):
             except Exception as e:
                 logger.error(f"Transcription error: {e}", exc_info=True)
                 show_alert("Transcription Failed", str(e))
+
+        bg_worker.submit(_run())
+
+    def copy_active_page(self, _=None):
+        """Copy the currently open page in the active Quaderno document to the clipboard."""
+        from quaderno_companion.triggers.clipboard import copy_active_page_to_clipboard
+
+        async def _run():
+            notify("Quaderno Companion", "Copying Page...", "Rendering active page for clipboard...")
+            try:
+                res = await copy_active_page_to_clipboard(from_screen=False)
+                doc_title = res.get("title", "Document")
+                p = res.get("page", 1)
+                tot = res.get("total_pages", 1)
+                notify(
+                    "Quaderno Companion",
+                    "Page Copied to Clipboard",
+                    f"Copied '{doc_title}' (p. {p}/{tot}) to clipboard.",
+                )
+            except Exception as e:
+                logger.error(f"Copy page error: {e}", exc_info=True)
+                show_alert("Copy Page Error", str(e))
+
+        bg_worker.submit(_run())
+
+    def copy_device_screen(self, _=None):
+        """Capture the live Quaderno device screen and copy it to the clipboard."""
+        from quaderno_companion.triggers.clipboard import copy_active_page_to_clipboard
+
+        async def _run():
+            notify("Quaderno Companion", "Capturing Screen...", "Snapping live Quaderno screen...")
+            try:
+                await copy_active_page_to_clipboard(from_screen=True)
+                notify(
+                    "Quaderno Companion",
+                    "Screen Copied to Clipboard",
+                    "Live Quaderno display copied to clipboard as image.",
+                )
+            except Exception as e:
+                logger.error(f"Copy screen error: {e}", exc_info=True)
+                show_alert("Screen Capture Error", str(e))
 
         bg_worker.submit(_run())
 

@@ -521,6 +521,39 @@ def goto_page(
     run_async(_goto())
 
 
+@app.command(name="copy-page")
+def copy_page(
+    page: Optional[int] = typer.Option(None, "--page", "-p", help="Specific page number to copy (defaults to active page)"),
+    screen: bool = typer.Option(False, "--screen", "-s", help="Capture live device screen instead of rendering document page"),
+    dpi: int = typer.Option(200, "--dpi", help="Rendering resolution for document page (default: 200)"),
+    save: Optional[Path] = typer.Option(None, "--save", "-o", help="Optional path to also save the captured image file"),
+):
+    """Copy the currently open page in the active Quaderno document to the computer's clipboard as an image."""
+    from quaderno_companion.triggers.clipboard import copy_active_page_to_clipboard, get_active_page_image, set_clipboard_image
+
+    async def _copy():
+        status_msg = "Capturing live Quaderno screen..." if screen else "Rendering active document page..."
+        with console.status(f"[bold cyan]{status_msg}[/bold cyan]"):
+            try:
+                if save:
+                    img_bytes, img_fmt, meta = await get_active_page_image(page=page, dpi=dpi, from_screen=screen)
+                    set_clipboard_image(img_bytes, image_format=img_fmt)
+                    save_path = save.expanduser().resolve()
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    save_path.write_bytes(img_bytes)
+                    rprint(f"[bold green]✓[/bold green] Saved image to [cyan]{save_path}[/cyan] ({len(img_bytes)/1024:.1f} KB)")
+                    rprint(f"[bold green]✓[/bold green] Copied image to clipboard ({meta.get('title')}, page {meta.get('page')}/{meta.get('total_pages')})")
+                else:
+                    res = await copy_active_page_to_clipboard(page=page, dpi=dpi, from_screen=screen)
+                    rprint(f"[bold green]✓[/bold green] Copied to clipboard: [white]{res.get('title')}[/white] (Page {res.get('page')}/{res.get('total_pages')})")
+                    rprint(f"[dim]Format: {res.get('format').upper()} ({res.get('size_bytes')/1024:.1f} KB)[/dim]")
+            except Exception as e:
+                rprint(f"[bold red]Failed to copy page image:[/bold red] {e}")
+                sys.exit(1)
+
+    run_async(_copy())
+
+
 @app.command()
 def status():
     """Display real-time Quaderno connection, battery, storage, and active reading state."""

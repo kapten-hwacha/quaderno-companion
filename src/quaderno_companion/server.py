@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -175,6 +175,12 @@ class AgentPushRequest(BaseModel):
 
 class AgentChatRequest(BaseModel):
     query: str = Field(..., description="Natural language command or query.")
+
+
+class CopyPageRequest(BaseModel):
+    page: Optional[int] = Field(None, description="Target page number (defaults to active page).")
+    from_screen: bool = Field(False, description="Capture live device screen instead of rendering page.")
+    dpi: int = Field(200, description="DPI for rendering.")
 
 
 # ---------------- API Endpoints ----------------
@@ -491,6 +497,47 @@ async def navigate_page(nav: PageNavigationRequest):
     except Exception as e:
         logger.error(f"Navigation failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Navigation command failed.")
+
+
+@app.post(
+    "/api/viewer/copy-page",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def copy_page(req: Optional[CopyPageRequest] = None):
+    """Copies the active Quaderno page (or screen) to the server host's system clipboard."""
+    from quaderno_companion.triggers.clipboard import copy_active_page_to_clipboard
+    try:
+        p = req.page if req else None
+        s = req.from_screen if req else False
+        d = req.dpi if req else 200
+        return await copy_active_page_to_clipboard(page=p, dpi=d, from_screen=s)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Copy page failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to copy page: {str(e)}")
+
+
+@app.get(
+    "/api/viewer/page/image",
+    dependencies=[Depends(verify_rate_limit), Depends(verify_api_auth)],
+)
+async def get_page_image(
+    page: Optional[int] = Query(None, description="Target page number (defaults to active page)"),
+    screen: bool = Query(False, description="Capture live screen"),
+    dpi: int = Query(200, description="Resolution DPI"),
+):
+    """Fetch raw image bytes (PNG or JPEG) of the active Quaderno page or live screen."""
+    from quaderno_companion.triggers.clipboard import get_active_page_image
+    try:
+        img_bytes, img_fmt, _ = await get_active_page_image(page=page, dpi=dpi, from_screen=screen)
+        media_type = "image/jpeg" if img_fmt == "jpeg" else "image/png"
+        return Response(content=img_bytes, media_type=media_type)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Get page image failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch page image: {str(e)}")
 
 
 @app.post(
