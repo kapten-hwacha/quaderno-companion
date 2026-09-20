@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Quaderno Companion Daemon",
     description="Autonomous E-Ink bridge and reader navigation controller for Fujitsu Quaderno Gen 2",
-    version="0.2.1",
+    version="0.2.2",
     lifespan=lifespan,
 )
 
@@ -682,5 +682,5 @@ async def root():
     return {
         "status": "ok",
         "app": "quaderno-companion",
-        "version": "0.2.1",
+        "version": "0.2.2",
     }
