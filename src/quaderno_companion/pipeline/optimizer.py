@@ -302,14 +302,20 @@ class EinkOptimizer:
             out_bytes = self.optimize_pdf(pdf_bytes_tmp, output_path=output_path)
             return out_bytes, f"{title}.pdf"
 
-        elif suffix in (".md", ".txt"):
+        elif suffix in (".md", ".markdown", ".txt"):
             from quaderno_companion.pipeline.templates import EinkDocumentBuilder
             builder = EinkDocumentBuilder(profile_name=self.profile.name)
             content = path.read_text(encoding="utf-8")
-            pdf_bytes = builder.render_article_pdf(
-                title=title,
-                content_html_or_text=content,
-            )
+            if suffix in (".md", ".markdown"):
+                pdf_bytes = builder.render_markdown_pdf(
+                    title=title,
+                    content_markdown=content,
+                )
+            else:
+                pdf_bytes = builder.render_article_pdf(
+                    title=title,
+                    content_html_or_text=content,
+                )
             if output_path:
                 Path(output_path).write_bytes(pdf_bytes)
             return pdf_bytes, f"{title}.pdf"

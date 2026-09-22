@@ -27,6 +27,7 @@ dependencies = [
     "rumps>=0.4.0; sys_platform == 'darwin'",
     "lz4>=4.3.0",
     "pyobjc-framework-quartz>=12.2.2; sys_platform == 'darwin'",
+    "matplotlib>=3.11.2",
 ]
 
 [project.scripts]

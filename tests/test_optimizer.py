@@ -421,3 +421,26 @@ def test_math_equation_transformation_matrix_preservation():
     # Y-coordinates should remain strictly monotonic (top to bottom)
     assert y_coords == sorted(y_coords), "Text blocks collapsed or overlapped after optimization!"
     out_doc.close()
+
+
+def test_optimize_file_markdown_with_math(tmp_path):
+    """Verify EinkOptimizer converts and optimizes Markdown files with LaTeX equations."""
+    md_file = tmp_path / "quantum.md"
+    md_file.write_text(
+        "# Quantum Mechanics Notes\n\n"
+        "Schrödinger equation:\n\n"
+        r"$$i\hbar \frac{\partial}{\partial t}\Psi = \hat{H}\Psi$$" + "\n\n"
+        r"And energy eigenvalues: $E_n = (n + 1/2)\hbar\omega$." + "\n",
+        encoding="utf-8",
+    )
+
+    optimizer = EinkOptimizer(profile_name="A4")
+    out_bytes, out_filename = optimizer.optimize_file(md_file)
+
+    assert len(out_bytes) > 1000
+    assert out_filename == "quantum.pdf"
+
+    doc = pymupdf.open(stream=out_bytes, filetype="pdf")
+    assert len(doc) >= 1
+    doc.close()
+

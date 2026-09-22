@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict, Union
+from typing import Literal, TypedDict
 
 from quaderno_companion.config import settings
 from quaderno_companion.device.client import (
@@ -29,6 +29,7 @@ NavAction = Literal["next", "prev", "goto", "offset"]
 
 class OpenDocumentResult(TypedDict):
     """Shape returned by QuadernoDeviceManager.open_document()."""
+
     status: str
     document_id: str
     title: str
@@ -39,9 +40,10 @@ class OpenDocumentResult(TypedDict):
 
 class NavigateResult(TypedDict):
     """Shape returned by QuadernoDeviceManager.navigate()."""
+
     status: str
     document_id: str
-    title: Optional[str]
+    title: str | None
     page: int
     total_pages: int
     action: str
@@ -50,9 +52,10 @@ class NavigateResult(TypedDict):
 @dataclass
 class ReadingState:
     """Active document reading position and metadata."""
-    document_id: Optional[str] = None
-    title: Optional[str] = None
-    remote_path: Optional[str] = None
+
+    document_id: str | None = None
+    title: str | None = None
+    remote_path: str | None = None
     current_page: int = 1
     total_pages: int = 1
     last_updated: datetime = field(default_factory=datetime.now)
@@ -61,26 +64,28 @@ class ReadingState:
 @dataclass
 class DeviceStatus:
     """Consolidated Quaderno device telemetry and reading context."""
+
     is_connected: bool = False
     is_paired: bool = False
     connection_type: ConnectionType = "unknown"
-    host: Optional[str] = None
+    host: str | None = None
     port: int = 8443
-    battery_level: Optional[int] = None
-    battery_charging: Optional[bool] = None
-    storage_total_mb: Optional[float] = None
-    storage_free_mb: Optional[float] = None
+    battery_level: int | None = None
+    battery_charging: bool | None = None
+    storage_total_mb: float | None = None
+    storage_free_mb: float | None = None
     reading_state: ReadingState = field(default_factory=ReadingState)
 
 
-def extract_pdf_toc(pdf_bytes: bytes) -> List[Tuple[str, int]]:
+def extract_pdf_toc(pdf_bytes: bytes) -> list[tuple[str, int]]:
     """Extract Table of Contents bookmarks/outlines from PDF bytes."""
     if not pdf_bytes:
         return []
-    
+
     # 1. Primary: Use PyMuPDF
     try:
         import pymupdf
+
         doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
         toc = doc.get_toc()
         doc.close()
@@ -100,9 +105,12 @@ def extract_pdf_toc(pdf_bytes: bytes) -> List[Tuple[str, int]]:
     # 2. Fallback: pypdf if available
     try:
         import io
+
         from pypdf import PdfReader
+
         reader = PdfReader(io.BytesIO(pdf_bytes))
         if reader.outline:
+
             def _parse_outlines(outlines):
                 entries = []
                 for item in outlines:
@@ -117,6 +125,7 @@ def extract_pdf_toc(pdf_bytes: bytes) -> List[Tuple[str, int]]:
                         except Exception:
                             pass
                 return entries
+
             return _parse_outlines(reader.outline)
     except Exception:
         pass
@@ -129,15 +138,15 @@ class QuadernoDeviceManager:
 
     def __init__(self):
         self.router = NetworkRouter()
-        self._client: Optional[QuadernoClient] = None
-        self._current_route: Optional[DeviceRoute] = None
+        self._client: QuadernoClient | None = None
+        self._current_route: DeviceRoute | None = None
         self._reading_state = ReadingState()
         self._doc_toc_cache: dict = {}
-        self._last_pushed_doc_id: Optional[str] = None
+        self._last_pushed_doc_id: str | None = None
         self._last_pushed_time: float = 0.0
         self._last_storage_fetch: float = 0.0
-        self._cached_storage_total_mb: Optional[float] = None
-        self._cached_storage_free_mb: Optional[float] = None
+        self._cached_storage_total_mb: float | None = None
+        self._cached_storage_free_mb: float | None = None
         self._load_persisted_state()
         self._load_persisted_toc_cache()
         # Re-entrant thread lock protects client resolution and route caching across all threads/event loops
@@ -168,22 +177,30 @@ class QuadernoDeviceManager:
                 if isinstance(data, dict):
                     for k, v in data.items():
                         if isinstance(v, list):
-                            self._doc_toc_cache[k] = [(str(item[0]), int(item[1])) for item in v if len(item) >= 2]
+                            self._doc_toc_cache[k] = [
+                                (str(item[0]), int(item[1]))
+                                for item in v
+                                if len(item) >= 2
+                            ]
         except Exception as e:
             logger.debug(f"Could not load persisted TOC cache: {e}")
 
-    def _save_persisted_toc(self, doc_id: str, toc: List[Tuple[str, int]]):
+    def _save_persisted_toc(self, doc_id: str, toc: list[tuple[str, int]]):
         """Save a document's TOC to the persisted disk cache."""
         try:
             settings.ensure_directories()
             data = {}
             if settings.toc_cache_path.exists():
                 try:
-                    data = json.loads(settings.toc_cache_path.read_text(encoding="utf-8"))
+                    data = json.loads(
+                        settings.toc_cache_path.read_text(encoding="utf-8")
+                    )
                 except Exception:
                     data = {}
             data[doc_id] = [[title, page] for title, page in toc]
-            settings.toc_cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            settings.toc_cache_path.write_text(
+                json.dumps(data, indent=2), encoding="utf-8"
+            )
         except Exception as e:
             logger.debug(f"Could not save persisted TOC cache: {e}")
 
@@ -212,7 +229,7 @@ class QuadernoDeviceManager:
         return settings.device_id_path.exists() and settings.device_key_path.exists()
 
     @property
-    def client(self) -> Optional[QuadernoClient]:
+    def client(self) -> QuadernoClient | None:
         """Return active QuadernoClient instance (synchronous, thread-safe for WebDAV/WSGI)."""
         if self._client and getattr(self._client, "is_authenticated", False):
             return self._client
@@ -234,8 +251,15 @@ class QuadernoDeviceManager:
             )
 
         with self._sync_lock:
-            if not force_refresh and self._client and self._client.is_authenticated and self._current_route:
-                if self.router._probe_endpoint_sync(self._current_route.host, self._current_route.port, timeout=1.5):
+            if (
+                not force_refresh
+                and self._client
+                and self._client.is_authenticated
+                and self._current_route
+            ):
+                if self.router._probe_endpoint_sync(
+                    self._current_route.host, self._current_route.port, timeout=1.5
+                ):
                     return self._client
                 self._client = None
                 self._current_route = None
@@ -254,7 +278,9 @@ class QuadernoDeviceManager:
                 self.router.invalidate_cache()
                 self._client = None
                 self._current_route = None
-                raise DeviceNotConnectedError(f"Authentication with Quaderno at {route.host} failed: {auth_err}") from auth_err
+                raise DeviceNotConnectedError(
+                    f"Authentication with Quaderno at {route.host} failed: {auth_err}"
+                ) from auth_err
 
             self._current_route = route
             self._client = client
@@ -266,7 +292,7 @@ class QuadernoDeviceManager:
         """Get or initialize active Quaderno client using the best network route."""
         return await asyncio.to_thread(self.get_client_sync, force_refresh)
 
-    async def get_available_folders(self) -> List[str]:
+    async def get_available_folders(self) -> list[str]:
         """Fetch all available folder paths from the Quaderno device or local mirror."""
         folders = set()
         try:
@@ -297,9 +323,9 @@ class QuadernoDeviceManager:
         self,
         pdf_bytes: bytes,
         filename: str,
-        title: Optional[str] = None,
+        title: str | None = None,
         page: int = 1,
-        remote_folder: Optional[str] = None,
+        remote_folder: str | None = None,
     ) -> OpenDocumentResult:
         """Upload and display a document on the Quaderno screen.
 
@@ -325,6 +351,7 @@ class QuadernoDeviceManager:
         raw_toc = []
         try:
             import pymupdf
+
             doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
             total_pages = max(1, doc.page_count)
             doc.close()
@@ -373,7 +400,7 @@ class QuadernoDeviceManager:
             "total_pages": total_pages,
         }
 
-    async def get_toc(self, document_id: Optional[str] = None) -> List[Tuple[str, int]]:
+    async def get_toc(self, document_id: str | None = None) -> list[tuple[str, int]]:
         """Retrieve Table of Contents landmarks for active or specified document."""
         self._load_persisted_state()
         target_id = document_id or self._reading_state.document_id
@@ -389,7 +416,11 @@ class QuadernoDeviceManager:
 
         try:
             client = await self.get_client()
-            remote_path = self._reading_state.remote_path if target_id == self._reading_state.document_id else None
+            remote_path = (
+                self._reading_state.remote_path
+                if target_id == self._reading_state.document_id
+                else None
+            )
             lookup_target = target_id or remote_path
             if lookup_target:
                 pdf_bytes = await client.download_document_async(lookup_target)
@@ -405,7 +436,9 @@ class QuadernoDeviceManager:
 
         return []
 
-    async def navigate(self, action: NavAction, page: Optional[int] = None) -> NavigateResult:
+    async def navigate(
+        self, action: NavAction, page: int | None = None
+    ) -> NavigateResult:
         """Send navigation commands to Quaderno document viewer.
 
         Args:
@@ -430,7 +463,11 @@ class QuadernoDeviceManager:
                     # Switched document on device
                     doc_id = recent_id
                     curr = int(recent.get("current_page", 1))
-                    total = int(recent.get("total_page", 1)) if recent.get("total_page") else 1
+                    total = (
+                        int(recent.get("total_page", 1))
+                        if recent.get("total_page")
+                        else 1
+                    )
         except Exception:
             pass
 
@@ -493,9 +530,13 @@ class QuadernoDeviceManager:
             current_client = self._client
 
         if current_route and current_client and current_client.is_authenticated:
-            is_alive = self.router._probe_endpoint_sync(current_route.host, current_route.port, timeout=0.6)
+            is_alive = self.router._probe_endpoint_sync(
+                current_route.host, current_route.port, timeout=0.6
+            )
             if not is_alive:
-                logger.debug(f"Fast ping to {current_route.host}:{current_route.port} failed; device powered off/disconnected.")
+                logger.debug(
+                    f"Fast ping to {current_route.host}:{current_route.port} failed; device powered off/disconnected."
+                )
                 with self._sync_lock:
                     self._client = None
                     self._current_route = None
@@ -518,9 +559,9 @@ class QuadernoDeviceManager:
                 if isinstance(bat_res, dict):
                     lvl = bat_res.get("level") or bat_res.get("battery_level")
                     status.battery_level = int(lvl) if lvl is not None else None
-                    status.battery_charging = (
-                        bat_res.get("status") == "charging" or bat_res.get("charging", False)
-                    )
+                    status.battery_charging = bat_res.get(
+                        "status"
+                    ) == "charging" or bat_res.get("charging", False)
             except Exception as e:
                 logger.debug(f"Device unreachable during status check: {e}")
                 with self._sync_lock:
@@ -532,19 +573,31 @@ class QuadernoDeviceManager:
 
             # 2. Storage status (best effort, throttled to 60s intervals to save TLS roundtrips)
             now = time.time()
-            if (now - getattr(self, "_last_storage_fetch", 0.0)) > 60.0 or self._cached_storage_free_mb is None:
+            if (
+                now - getattr(self, "_last_storage_fetch", 0.0)
+            ) > 60.0 or self._cached_storage_free_mb is None:
                 try:
                     storage_res = await client.get_storage_status()
                     if isinstance(storage_res, dict):
-                        total_b = storage_res.get("total_space") or storage_res.get("capacity")
-                        free_b = storage_res.get("free_space") or storage_res.get("available")
+                        total_b = storage_res.get("total_space") or storage_res.get(
+                            "capacity"
+                        )
+                        free_b = storage_res.get("free_space") or storage_res.get(
+                            "available"
+                        )
                         if total_b is not None:
-                            self._cached_storage_total_mb = round(float(total_b) / (1024 * 1024), 1)
+                            self._cached_storage_total_mb = round(
+                                float(total_b) / (1024 * 1024), 1
+                            )
                         if free_b is not None:
-                            self._cached_storage_free_mb = round(float(free_b) / (1024 * 1024), 1)
+                            self._cached_storage_free_mb = round(
+                                float(free_b) / (1024 * 1024), 1
+                            )
                         self._last_storage_fetch = now
                 except Exception as storage_err:
-                    logger.debug(f"Storage status query failed (non-critical): {storage_err}")
+                    logger.debug(
+                        f"Storage status query failed (non-critical): {storage_err}"
+                    )
 
             status.storage_total_mb = self._cached_storage_total_mb
             status.storage_free_mb = self._cached_storage_free_mb
@@ -554,12 +607,30 @@ class QuadernoDeviceManager:
                 recent_res = await client.get_recent_document()
                 if isinstance(recent_res, dict) and recent_res.get("entry_id"):
                     recent_id = recent_res["entry_id"]
-                    is_recent_nav = (time.time() - getattr(self, "_last_nav_time", 0.0)) < 5.0
-                    is_recent_push = (time.time() - getattr(self, "_last_pushed_time", 0.0)) < 300.0
-                    if not is_recent_push or recent_id == getattr(self, "_last_pushed_doc_id", None):
-                        tot_p = int(recent_res.get("total_page", 1)) if recent_res.get("total_page") else max(1, self._reading_state.total_pages)
-                        doc_name = recent_res.get("entry_name") or recent_res.get("title") or self._reading_state.title or "Document"
-                        if is_recent_nav and self._reading_state.document_id == recent_id:
+                    is_recent_nav = (
+                        time.time() - getattr(self, "_last_nav_time", 0.0)
+                    ) < 5.0
+                    is_recent_push = (
+                        time.time() - getattr(self, "_last_pushed_time", 0.0)
+                    ) < 5.0
+                    if not is_recent_push or recent_id == getattr(
+                        self, "_last_pushed_doc_id", None
+                    ):
+                        tot_p = (
+                            int(recent_res.get("total_page", 1))
+                            if recent_res.get("total_page")
+                            else max(1, self._reading_state.total_pages)
+                        )
+                        doc_name = (
+                            recent_res.get("entry_name")
+                            or recent_res.get("title")
+                            or self._reading_state.title
+                            or "Document"
+                        )
+                        if (
+                            is_recent_nav
+                            and self._reading_state.document_id == recent_id
+                        ):
                             cur_p = self._reading_state.current_page
                         else:
                             cur_p = int(recent_res.get("current_page", 1))
@@ -574,7 +645,9 @@ class QuadernoDeviceManager:
                         )
                         self._save_persisted_state()
             except Exception as recent_err:
-                logger.debug(f"Recent document sync failed (non-critical): {recent_err}")
+                logger.debug(
+                    f"Recent document sync failed (non-critical): {recent_err}"
+                )
 
             status.reading_state = self._reading_state
 
@@ -588,7 +661,9 @@ class QuadernoDeviceManager:
 
         return status
 
-    async def pair_device(self, pin: Optional[str] = None, host: Optional[str] = None) -> Tuple[str, str]:
+    async def pair_device(
+        self, pin: str | None = None, host: str | None = None
+    ) -> tuple[str, str]:
         """Pair with Quaderno using PIN."""
         target_host = host or settings.device_ip
         if not target_host:
@@ -596,7 +671,9 @@ class QuadernoDeviceManager:
             if route:
                 target_host = route.host
 
-        client = QuadernoClient(host=target_host or "127.0.0.1", port=settings.device_port)
+        client = QuadernoClient(
+            host=target_host or "127.0.0.1", port=settings.device_port
+        )
         return await client.register(pin=pin)
 
 

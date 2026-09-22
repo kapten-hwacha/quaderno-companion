@@ -329,12 +329,18 @@ class ContentFetcher:
                 filename=self._sanitize_filename(f"{title}.pdf"),
             )
 
-        elif suffix in (".md", ".txt"):
+        elif suffix in (".md", ".markdown", ".txt"):
             content = path.read_text(encoding="utf-8")
-            pdf_bytes = self.builder.render_article_pdf(
-                title=title,
-                content_html_or_text=content,
-            )
+            if suffix in (".md", ".markdown"):
+                pdf_bytes = self.builder.render_markdown_pdf(
+                    title=title,
+                    content_markdown=content,
+                )
+            else:
+                pdf_bytes = self.builder.render_article_pdf(
+                    title=title,
+                    content_html_or_text=content,
+                )
             return FetchedDocument(
                 title=title,
                 pdf_bytes=pdf_bytes,

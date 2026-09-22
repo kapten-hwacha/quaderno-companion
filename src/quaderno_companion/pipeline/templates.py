@@ -6,8 +6,15 @@ for Fujitsu Quaderno Gen 2 screen dimensions and reading ergonomics.
 
 import html
 import io
+import logging
+import os
 from datetime import datetime
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
 from typing import Any, Dict, List, Optional, Union
+
 from reportlab.lib.colors import black, white, HexColor
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -19,9 +26,65 @@ from reportlab.platypus import (
     Spacer,
     Table,
     TableStyle,
+    Image as RLImage,
 )
 
 from quaderno_companion.config import SCREEN_PROFILES, ScreenProfile, settings
+
+logger = logging.getLogger(__name__)
+
+
+def render_latex_math_to_image_flowable(latex_str: str, dpi: int = 200, max_width_pt: float = 400.0) -> Optional[Any]:
+    """Render a LaTeX mathematical formula into a ReportLab Image flowable using Matplotlib mathtext.
+    
+    Renders pure mathematical formulas without requiring an external LaTeX distribution.
+    """
+    try:
+        from matplotlib import mathtext
+        from PIL import Image as PILImage
+
+        clean_math = latex_str.strip()
+        # Strip $$ or $ delimiters
+        if clean_math.startswith("$$") and clean_math.endswith("$$") and len(clean_math) > 4:
+            clean_math = clean_math[2:-2].strip()
+        elif clean_math.startswith("\\[") and clean_math.endswith("\\]") and len(clean_math) > 4:
+            clean_math = clean_math[2:-2].strip()
+        elif clean_math.startswith("$") and clean_math.endswith("$") and len(clean_math) > 2:
+            clean_math = clean_math[1:-1].strip()
+
+        if not clean_math:
+            return None
+
+        # Clean common math block wrappers
+        if clean_math.startswith(r"\begin{aligned}") and clean_math.endswith(r"\end{aligned}"):
+            clean_math = clean_math[15:-13].strip()
+        elif clean_math.startswith(r"\begin{align*}") and clean_math.endswith(r"\end{align*}"):
+            clean_math = clean_math[14:-12].strip()
+        elif clean_math.startswith(r"\begin{equation*}") and clean_math.endswith(r"\end{equation*}"):
+            clean_math = clean_math[17:-15].strip()
+
+        buf = io.BytesIO()
+        mathtext.math_to_image(clean_math, buf, dpi=dpi, format="png")
+        buf.seek(0)
+
+        pil_img = PILImage.open(buf)
+        w_px, h_px = pil_img.size
+        w_pt = w_px * 72.0 / float(dpi)
+        h_pt = h_px * 72.0 / float(dpi)
+
+        # Scale down proportionally if wider than page content width
+        if w_pt > max_width_pt:
+            ratio = max_width_pt / w_pt
+            w_pt = max_width_pt
+            h_pt = h_pt * ratio
+
+        buf.seek(0)
+        img = RLImage(buf, width=w_pt, height=h_pt)
+        img.hAlign = "CENTER"
+        return img
+    except Exception as e:
+        logger.debug(f"Could not render formula '{latex_str[:40]}...' with mathtext: {e}")
+        return None
 
 
 class EinkDocumentBuilder:
@@ -88,6 +151,18 @@ class EinkDocumentBuilder:
             textColor=black,
             spaceBefore=10,
             spaceAfter=4,
+            keepWithNext=True,
+        )
+
+        h3_style = ParagraphStyle(
+            "EinkH3",
+            parent=styles["Heading3"],
+            fontName=font_bold,
+            fontSize=11.5,
+            leading=15,
+            textColor=black,
+            spaceBefore=8,
+            spaceAfter=3,
             keepWithNext=True,
         )
 
@@ -162,6 +237,7 @@ class EinkDocumentBuilder:
             "subtitle": subtitle_style,
             "h1": h1_style,
             "h2": h2_style,
+            "h3": h3_style,
             "body": body_style,
             "bullet": bullet_style,
             "callout": callout_style,
@@ -379,7 +455,7 @@ class EinkDocumentBuilder:
                             story.append(tbl)
                             story.append(Spacer(1, 8))
         else:
-            # Fallback for plain text / markdown input
+            # Plain text / markdown input fallback with math formula rendering
             paragraphs = content_html_or_text.split("\n\n")
             for p in paragraphs:
                 text = p.strip()
@@ -389,12 +465,127 @@ class EinkDocumentBuilder:
                     story.append(Paragraph(html.escape(text[2:]), self.styles["h1"]))
                 elif text.startswith("## "):
                     story.append(Paragraph(html.escape(text[3:]), self.styles["h2"]))
+                elif text.startswith("### "):
+                    story.append(Paragraph(html.escape(text[4:]), self.styles["h3"]))
                 elif text.startswith("- ") or text.startswith("* "):
                     story.append(Paragraph(f"• &nbsp; {html.escape(text[2:])}", self.styles["bullet"]))
+                elif (text.startswith("$$") and text.endswith("$$")) or (text.startswith("\\[") and text.endswith("\\]")):
+                    # Dedicated display math block
+                    math_img = render_latex_math_to_image_flowable(text, max_width_pt=avail_w)
+                    if math_img:
+                        story.append(Spacer(1, 4))
+                        story.append(math_img)
+                        story.append(Spacer(1, 4))
+                    else:
+                        story.append(Paragraph(html.escape(text), self.styles["code"]))
+                elif "$$" in text:
+                    # Paragraph containing display math blocks ($$...$$)
+                    parts = text.split("$$")
+                    for idx, part in enumerate(parts):
+                        part = part.strip()
+                        if not part:
+                            continue
+                        if idx % 2 == 1:
+                            # Formula inside $$
+                            math_img = render_latex_math_to_image_flowable(part, max_width_pt=avail_w)
+                            if math_img:
+                                story.append(Spacer(1, 4))
+                                story.append(math_img)
+                                story.append(Spacer(1, 4))
+                            else:
+                                story.append(Paragraph(html.escape(part), self.styles["code"]))
+                        else:
+                            story.append(Paragraph(html.escape(part), self.styles["body"]))
                 else:
                     story.append(Paragraph(html.escape(text), self.styles["body"]))
 
         doc.build(story)
         return buffer.getvalue()
+
+    def render_markdown_pdf(
+        self,
+        title: str,
+        content_markdown: str,
+        author: Optional[str] = None,
+        source_url: Optional[str] = None,
+    ) -> bytes:
+        """Render a Markdown document with full mathematical equations ($...$ and $$...$$) into a Quaderno PDF.
+        
+        Attempts compilation via Pandoc + LaTeX engine for pristine vector math typography.
+        Seamlessly falls back to the internal ReportLab + Mathtext renderer if Pandoc is not installed.
+        """
+        # 1. High-fidelity Pandoc compilation if available
+        pandoc_pdf = self._try_render_pandoc(title=title, content_markdown=content_markdown)
+        if pandoc_pdf is not None:
+            return pandoc_pdf
+
+        # 2. Native ReportLab fallback with Matplotlib mathtext equation rendering
+        return self.render_article_pdf(
+            title=title,
+            content_html_or_text=content_markdown,
+            author=author,
+            source_url=source_url,
+        )
+
+    def _try_render_pandoc(self, title: str, content_markdown: str) -> Optional[bytes]:
+        """Attempt to compile markdown with LaTeX math using pandoc and a TeX engine."""
+        extra_paths = [
+            "/opt/homebrew/bin",
+            "/Library/TeX/texbin",
+            "/usr/local/bin",
+            str(Path.home() / ".local" / "bin"),
+        ]
+        env = dict(os.environ)
+        env["PATH"] = ":".join(extra_paths) + ":" + env.get("PATH", "")
+
+        pandoc_bin = shutil.which("pandoc", path=env["PATH"])
+        if not pandoc_bin:
+            return None
+
+        # Determine available pdf engine
+        pdf_engine = None
+        for engine in ("xelatex", "pdflatex", "lualatex", "weasyprint", "typst"):
+            if shutil.which(engine, path=env["PATH"]):
+                pdf_engine = engine
+                break
+
+        if not pdf_engine:
+            return None
+
+        paper = "a5paper" if "A5" in self.profile.name else "a4paper"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            in_file = tmp_path / "input.md"
+            out_file = tmp_path / "output.pdf"
+
+            md_text = content_markdown
+            if not md_text.startswith("---"):
+                safe_title = title.replace('"', '\\"')
+                md_text = f'---\ntitle: "{safe_title}"\n---\n\n' + md_text
+
+            in_file.write_text(md_text, encoding="utf-8")
+
+            cmd = [
+                pandoc_bin,
+                "-f", "markdown",
+                "-t", "pdf",
+                f"--pdf-engine={pdf_engine}",
+                "-V", f"geometry:{paper},margin=18mm",
+                "-V", "fontsize=11pt",
+                "-o", str(out_file),
+                str(in_file),
+            ]
+
+            try:
+                proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=30)
+                if proc.returncode == 0 and out_file.is_file() and out_file.stat().st_size > 500:
+                    return out_file.read_bytes()
+                logger.debug(f"Pandoc compilation failed (code {proc.returncode}): {proc.stderr}")
+            except Exception as e:
+                logger.debug(f"Error invoking pandoc: {e}")
+
+        return None
+
 
 

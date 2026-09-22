@@ -1,7 +1,6 @@
 """Tests for Menubar App interaction logic."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 
 from quaderno_companion.triggers.menubar import QuadernoMenubarApp
 
@@ -9,15 +8,26 @@ from quaderno_companion.triggers.menubar import QuadernoMenubarApp
 def test_menubar_execute_push_routing():
     """Verify _execute_push_or_summarize prompts for destination and calls tool_push_document."""
     from quaderno_companion.config import settings
+
     with patch("rumps.Timer"):
         app = QuadernoMenubarApp()
 
-    with patch("quaderno_companion.triggers.menubar.tool_push_document", new_callable=AsyncMock) as mock_push, \
-         patch("quaderno_companion.triggers.menubar.prompt_folder_dialog", return_value="Document/Companion") as mock_prompt, \
-         patch("quaderno_companion.triggers.menubar.notify") as mock_notify:
+    with (
+        patch(
+            "quaderno_companion.triggers.menubar.tool_push_document",
+            new_callable=AsyncMock,
+        ) as mock_push,
+        patch(
+            "quaderno_companion.triggers.menubar.prompt_folder_dialog",
+            return_value="Document/Companion",
+        ) as mock_prompt,
+        patch("quaderno_companion.triggers.menubar.notify") as mock_notify,
+    ):
         mock_push.return_value = {"status": "success", "message": "Pushed document"}
 
-        fut = app._execute_push_or_summarize(target="https://example.com/test", title="Test Page", page=2)
+        fut = app._execute_push_or_summarize(
+            target="https://example.com/test", title="Test Page", page=2
+        )
         if fut is not None:
             fut.result(timeout=5.0)
 
@@ -33,7 +43,6 @@ def test_menubar_execute_push_routing():
             page=2,
             destination_folder="Document/Companion",
         )
-
 
 
 def test_menubar_instant_page_navigation():
@@ -59,9 +68,17 @@ def test_menubar_instant_page_navigation():
             pass
         return MagicMock()
 
-    with patch("quaderno_companion.triggers.menubar.tool_navigate_reader", new_callable=AsyncMock) as mock_nav, \
-         patch("quaderno_companion.triggers.menubar.bg_worker.submit", side_effect=_close_coro) as mock_submit, \
-         patch.object(app, "refresh_telemetry"):
+    with (
+        patch(
+            "quaderno_companion.triggers.menubar.tool_navigate_reader",
+            new_callable=AsyncMock,
+        ) as mock_nav,
+        patch(
+            "quaderno_companion.triggers.menubar.bg_worker.submit",
+            side_effect=_close_coro,
+        ) as mock_submit,
+        patch.object(app, "refresh_telemetry"),
+    ):
         # Test nav_next
         app.nav_next(None)
         assert app._last_reading_state.current_page == 6
@@ -95,7 +112,6 @@ def test_menubar_instant_page_navigation():
 
 def test_menubar_chapters_menu_with_toc():
     """Verify refresh_telemetry populates chapters_menu from device_manager.get_toc."""
-    import time
     from quaderno_companion.device.manager import DeviceStatus, ReadingState
 
     with patch("rumps.Timer"):
@@ -112,12 +128,25 @@ def test_menubar_chapters_menu_with_toc():
         ),
     )
 
-    mock_toc = [("Chapter 1: Begin", 1), ("Chapter 2: Middle", 25), ("Chapter 3: End", 45)]
+    mock_toc = [
+        ("Chapter 1: Begin", 1),
+        ("Chapter 2: Middle", 25),
+        ("Chapter 3: End", 45),
+    ]
 
-    with patch.object(app, "_dispatch_to_main", side_effect=lambda f: f()), \
-         patch("quaderno_companion.triggers.menubar.device_manager.get_status", new_callable=AsyncMock, return_value=status), \
-         patch("quaderno_companion.triggers.menubar.device_manager.get_toc", new_callable=AsyncMock, return_value=mock_toc):
-
+    with (
+        patch.object(app, "_dispatch_to_main", side_effect=lambda f: f()),
+        patch(
+            "quaderno_companion.triggers.menubar.device_manager.get_status",
+            new_callable=AsyncMock,
+            return_value=status,
+        ),
+        patch(
+            "quaderno_companion.triggers.menubar.device_manager.get_toc",
+            new_callable=AsyncMock,
+            return_value=mock_toc,
+        ),
+    ):
         fut = app.refresh_telemetry()
         if fut is not None:
             fut.result(timeout=5.0)
@@ -149,10 +178,19 @@ def test_menubar_chapters_menu_landmark_fallback():
         ),
     )
 
-    with patch.object(app, "_dispatch_to_main", side_effect=lambda f: f()), \
-         patch("quaderno_companion.triggers.menubar.device_manager.get_status", new_callable=AsyncMock, return_value=status), \
-         patch("quaderno_companion.triggers.menubar.device_manager.get_toc", new_callable=AsyncMock, return_value=[]):
-
+    with (
+        patch.object(app, "_dispatch_to_main", side_effect=lambda f: f()),
+        patch(
+            "quaderno_companion.triggers.menubar.device_manager.get_status",
+            new_callable=AsyncMock,
+            return_value=status,
+        ),
+        patch(
+            "quaderno_companion.triggers.menubar.device_manager.get_toc",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+    ):
         fut = app.refresh_telemetry()
         if fut is not None:
             fut.result(timeout=5.0)
@@ -168,6 +206,7 @@ def test_menubar_chapters_menu_landmark_fallback():
 def test_prompt_folder_dialog(tmp_path):
     """Verify prompt_folder_dialog resolves mirror subfolders to remote paths."""
     from unittest.mock import MagicMock
+
     from quaderno_companion.triggers.preview import prompt_folder_dialog
 
     mirror = tmp_path / "Quaderno"
@@ -176,13 +215,17 @@ def test_prompt_folder_dialog(tmp_path):
     sub.mkdir(parents=True)
 
     # 1. Subfolder selected
-    mock_run_sub = MagicMock(return_value=MagicMock(returncode=0, stdout=str(sub) + "\n"))
+    mock_run_sub = MagicMock(
+        return_value=MagicMock(returncode=0, stdout=str(sub) + "\n")
+    )
     with patch("subprocess.run", mock_run_sub), patch("sys.platform", "darwin"):
         res = prompt_folder_dialog(root_mirror=mirror)
         assert res == "Document/Research/AI"
 
     # 2. Root mirror selected
-    mock_run_root = MagicMock(return_value=MagicMock(returncode=0, stdout=str(mirror) + "\n"))
+    mock_run_root = MagicMock(
+        return_value=MagicMock(returncode=0, stdout=str(mirror) + "\n")
+    )
     with patch("subprocess.run", mock_run_root), patch("sys.platform", "darwin"):
         res = prompt_folder_dialog(root_mirror=mirror)
         assert res == "Document"
@@ -196,10 +239,14 @@ def test_prompt_folder_dialog(tmp_path):
     # 4. Outside root mirror selected -> gives error alert and returns None
     outside_dir = tmp_path / "OtherFolder"
     outside_dir.mkdir()
-    mock_run_outside = MagicMock(return_value=MagicMock(returncode=0, stdout=str(outside_dir) + "\n"))
-    with patch("subprocess.run", mock_run_outside), \
-         patch("sys.platform", "darwin"), \
-         patch("quaderno_companion.triggers.preview.show_alert") as mock_alert:
+    mock_run_outside = MagicMock(
+        return_value=MagicMock(returncode=0, stdout=str(outside_dir) + "\n")
+    )
+    with (
+        patch("subprocess.run", mock_run_outside),
+        patch("sys.platform", "darwin"),
+        patch("quaderno_companion.triggers.preview.show_alert") as mock_alert,
+    ):
         res = prompt_folder_dialog(root_mirror=mirror)
         assert res is None
         mock_alert.assert_called_once()
@@ -227,7 +274,9 @@ def test_menubar_push_menu_structure():
     assert "🔗 Push URL..." not in top_titles
 
     # Verify they are present in the submenu
-    sub_titles = [item.title for item in app.other_push_menu.values() if hasattr(item, "title")]
+    sub_titles = [
+        item.title for item in app.other_push_menu.values() if hasattr(item, "title")
+    ]
     assert "🌐 Push Active Browser Tab" in sub_titles
     assert "🖥️ Push Active Window" in sub_titles
     assert "📋 Push from Clipboard" in sub_titles
@@ -352,42 +401,65 @@ def test_menubar_queue_integration(tmp_path):
             app = QuadernoMenubarApp()
 
         assert app.queue_menu.title == "Queued Files (0)"
-        if hasattr(app.queue_menu, "_menuitem") and hasattr(app.queue_menu._menuitem, "isEnabled"):
+        if hasattr(app.queue_menu, "_menuitem") and hasattr(
+            app.queue_menu._menuitem, "isEnabled"
+        ):
             assert app.queue_menu._menuitem.isEnabled() is False
 
         # Enqueue an item and update menu
         push_queue.enqueue_bytes(b"%PDF dummy", "offline.pdf", title="Offline Doc")
         app._update_queue_menu()
         assert app.queue_menu.title == "Queued Files (1)"
-        if hasattr(app.queue_menu, "_menuitem") and hasattr(app.queue_menu._menuitem, "isEnabled"):
+        if hasattr(app.queue_menu, "_menuitem") and hasattr(
+            app.queue_menu._menuitem, "isEnabled"
+        ):
             assert app.queue_menu._menuitem.isEnabled() is True
 
         # Clear queue via menubar
         app.clear_queue_manually()
         assert push_queue.count() == 0
         assert app.queue_menu.title == "Queued Files (0)"
-        if hasattr(app.queue_menu, "_menuitem") and hasattr(app.queue_menu._menuitem, "isEnabled"):
+        if hasattr(app.queue_menu, "_menuitem") and hasattr(
+            app.queue_menu._menuitem, "isEnabled"
+        ):
             assert app.queue_menu._menuitem.isEnabled() is False
 
         # Test offline push catches disconnect and enqueues
-        with patch("quaderno_companion.triggers.menubar.tool_push_document", side_effect=DeviceNotConnectedError("Quaderno offline")), \
-             patch("quaderno_companion.triggers.menubar.prompt_folder_dialog", return_value="Document/Companion"), \
-             patch("quaderno_companion.triggers.menubar.notify") as mock_notify, \
-             patch("quaderno_companion.pipeline.fetcher.ContentFetcher.fetch") as mock_fetch:
+        with (
+            patch(
+                "quaderno_companion.triggers.menubar.tool_push_document",
+                side_effect=DeviceNotConnectedError("Quaderno offline"),
+            ),
+            patch(
+                "quaderno_companion.triggers.menubar.prompt_folder_dialog",
+                return_value="Document/Companion",
+            ),
+            patch("quaderno_companion.triggers.menubar.notify") as mock_notify,
+            patch(
+                "quaderno_companion.pipeline.fetcher.ContentFetcher.fetch"
+            ) as mock_fetch,
+        ):
             from quaderno_companion.pipeline.fetcher import FetchedDocument
+
             mock_fetch.return_value = FetchedDocument(
                 title="Queued Web Article",
                 pdf_bytes=b"%PDF test",
                 filename="queued_article.pdf",
             )
 
-            fut = app._execute_push_or_summarize(target="https://example.com/article", title="Queued Web Article")
+            fut = app._execute_push_or_summarize(
+                target="https://example.com/article", title="Queued Web Article"
+            )
             if fut is not None:
                 fut.result(timeout=5.0)
 
             assert push_queue.count() == 1
             assert app.queue_menu.title == "Queued Files (1)"
-            mock_notify.assert_any_call("Quaderno Companion", "Document Queued", "Queued 'Queued Web Article'. Will push once Quaderno connects.")
+            mock_notify.assert_any_call(
+                "Quaderno Companion",
+                "Document Queued",
+                "Queued 'Queued Web Article'. Will push once Quaderno connects.",
+            )
     finally:
         settings.config_dir = original_config
         settings.cache_dir = original_cache
@@ -411,21 +483,32 @@ def test_menubar_transcribe_actions(tmp_path):
         "content": "# Notes",
     }
 
-    with patch("quaderno_companion.pipeline.transcriber.transcribe_pdf", new_callable=AsyncMock) as mock_transcribe, \
-         patch("quaderno_companion.triggers.menubar.notify") as mock_notify, \
-         patch("subprocess.run") as mock_open:
+    with (
+        patch(
+            "quaderno_companion.pipeline.transcriber.transcribe_pdf",
+            new_callable=AsyncMock,
+        ) as mock_transcribe,
+        patch("quaderno_companion.triggers.menubar.notify") as mock_notify,
+        patch("subprocess.run") as mock_open,
+    ):
         mock_transcribe.return_value = mock_res
         app._execute_transcribe(test_pdf)
         # Wait a tick for background worker execution
         import time
+
         time.sleep(0.2)
 
-        mock_notify.assert_any_call("Quaderno Companion", "Transcribing Notes...", "Processing 'notes.pdf' with Gemini...")
+        mock_notify.assert_any_call(
+            "Quaderno Companion",
+            "Transcribing Notes...",
+            "Processing 'notes.pdf' with Gemini...",
+        )
 
 
 def test_menubar_copy_page_actions():
     """Verify menubar copy page and copy screen menu initialization and callback dispatch."""
     import time
+
     with patch("rumps.Timer"):
         app = QuadernoMenubarApp()
 
@@ -445,14 +528,23 @@ def test_menubar_copy_page_actions():
         "size_bytes": 1024,
     }
 
-    with patch("quaderno_companion.triggers.clipboard.copy_active_page_to_clipboard", new_callable=AsyncMock) as mock_copy, \
-         patch("quaderno_companion.triggers.menubar.notify") as mock_notify:
+    with (
+        patch(
+            "quaderno_companion.triggers.clipboard.copy_active_page_to_clipboard",
+            new_callable=AsyncMock,
+        ) as mock_copy,
+        patch("quaderno_companion.triggers.menubar.notify") as mock_notify,
+    ):
         mock_copy.return_value = mock_res_page
 
         app.copy_active_page()
         time.sleep(0.2)
         mock_copy.assert_called_with(from_screen=False)
-        mock_notify.assert_any_call("Quaderno Companion", "Copying Page...", "Rendering active page for clipboard...")
+        mock_notify.assert_any_call(
+            "Quaderno Companion",
+            "Copying Page...",
+            "Rendering active page for clipboard...",
+        )
 
         mock_copy.reset_mock()
         mock_notify.reset_mock()
@@ -460,4 +552,25 @@ def test_menubar_copy_page_actions():
         app.copy_device_screen()
         time.sleep(0.2)
         mock_copy.assert_called_with(from_screen=True)
-        mock_notify.assert_any_call("Quaderno Companion", "Capturing Screen...", "Snapping live Quaderno screen...")
+        mock_notify.assert_any_call(
+            "Quaderno Companion",
+            "Capturing Screen...",
+            "Snapping live Quaderno screen...",
+        )
+
+
+def test_menubar_dock_icon_hidden_as_accessory():
+    """Verify that macOS activation policy is configured to Accessory so it does not appear in the Dock."""
+    mock_appkit = MagicMock()
+    mock_nsapp = MagicMock()
+    mock_appkit.NSApplication.sharedApplication.return_value = mock_nsapp
+    mock_appkit.NSApplicationActivationPolicyAccessory = 1
+
+    with (
+        patch("quaderno_companion.triggers.menubar.AppKit", mock_appkit),
+        patch("quaderno_companion.triggers.menubar.sys.platform", "darwin"),
+        patch("rumps.Timer"),
+    ):
+        app = QuadernoMenubarApp()
+
+    mock_nsapp.setActivationPolicy_.assert_called_once_with(1)

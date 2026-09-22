@@ -285,5 +285,27 @@ async def test_fetch_local_mobi_file(tmp_path: Path):
     assert doc.filename.endswith(".pdf")
 
 
+@pytest.mark.asyncio
+async def test_fetch_markdown_with_math(tmp_path: Path):
+    """Verify local Markdown file containing LaTeX math is converted to PDF without errors."""
+    md_path = tmp_path / "math_notes.md"
+    md_path.write_text(
+        "# Calculus Notes\n\n"
+        "Inline formula: $E = mc^2$\n\n"
+        "Display formula:\n\n"
+        r"$$\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}" + "\n\n"
+        "Conclusion paragraph.",
+        encoding="utf-8",
+    )
 
+    fetcher = ContentFetcher(profile_name="A4")
+    doc = await fetcher.fetch(str(md_path), optimize_for_eink=True)
 
+    assert isinstance(doc, FetchedDocument)
+    assert len(doc.pdf_bytes) > 1000
+    assert doc.filename == "math_notes.pdf"
+
+    import pymupdf
+    pdf_doc = pymupdf.open(stream=doc.pdf_bytes, filetype="pdf")
+    assert len(pdf_doc) >= 1
+    pdf_doc.close()

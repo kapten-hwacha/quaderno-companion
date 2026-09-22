@@ -72,8 +72,47 @@ async def test_get_active_page_image_from_screen():
 
 
 @pytest.mark.asyncio
+async def test_get_active_page_image_fetches_newest_from_device(tmp_path):
+    """Verify that get_active_page_image fetches the newest document from device even if local file exists."""
+    stale_pdf = _create_sample_pdf(page_count=1)
+    new_pdf = _create_sample_pdf(page_count=3)
+    doc_title = "AnnotatedDoc"
+
+    # Write stale PDF to local sync folder
+    settings.sync_dir = tmp_path
+    local_pdf = tmp_path / f"{doc_title}.pdf"
+    local_pdf.write_bytes(stale_pdf)
+
+    state = ReadingState(document_id="doc-active-123", title=doc_title, current_page=2, total_pages=3)
+    mock_client = MagicMock()
+    mock_client.download_document_async = AsyncMock(return_value=new_pdf)
+
+    with patch("quaderno_companion.device.manager.device_manager._reading_state", state), \
+         patch("quaderno_companion.device.manager.device_manager.get_status", new_callable=AsyncMock) as mock_get_status, \
+         patch("quaderno_companion.device.manager.device_manager.get_client", new_callable=AsyncMock) as mock_get_client:
+        mock_status = MagicMock()
+        mock_status.reading_state = state
+        mock_get_status.return_value = mock_status
+        mock_get_client.return_value = mock_client
+
+        img_bytes, fmt, meta = await get_active_page_image(dpi=150)
+
+        assert fmt == "png"
+        assert meta["title"] == doc_title
+        assert meta["page"] == 2
+        assert meta["total_pages"] == 3
+        assert meta["from_screen"] is False
+
+        # Verify device was queried for newest version
+        mock_client.download_document_async.assert_called_once_with("doc-active-123")
+
+        # Verify local file was refreshed with the newest downloaded bytes
+        assert local_pdf.read_bytes() == new_pdf
+
+
+@pytest.mark.asyncio
 async def test_get_active_page_image_pdf_render(tmp_path):
-    """Verify high-resolution PDF page rendering from local sync folder."""
+    """Verify high-resolution PDF page rendering fallback from local sync folder when device offline."""
     pdf_bytes = _create_sample_pdf(page_count=3)
     doc_title = "TestActiveDoc"
     
@@ -85,10 +124,12 @@ async def test_get_active_page_image_pdf_render(tmp_path):
     state = ReadingState(document_id="doc-999", title=doc_title, current_page=2, total_pages=3)
 
     with patch("quaderno_companion.device.manager.device_manager._reading_state", state), \
-         patch("quaderno_companion.device.manager.device_manager.get_status", new_callable=AsyncMock) as mock_get_status:
+         patch("quaderno_companion.device.manager.device_manager.get_status", new_callable=AsyncMock) as mock_get_status, \
+         patch("quaderno_companion.device.manager.device_manager.get_client", new_callable=AsyncMock) as mock_get_client:
         mock_status = MagicMock()
         mock_status.reading_state = state
         mock_get_status.return_value = mock_status
+        mock_get_client.return_value = None
 
         # Render page 2 (current page)
         img_bytes, fmt, meta = await get_active_page_image(dpi=150)
@@ -118,10 +159,12 @@ async def test_copy_active_page_to_clipboard_end_to_end(tmp_path):
 
     with patch("quaderno_companion.device.manager.device_manager._reading_state", state), \
          patch("quaderno_companion.device.manager.device_manager.get_status", new_callable=AsyncMock) as mock_status, \
+         patch("quaderno_companion.device.manager.device_manager.get_client", new_callable=AsyncMock) as mock_get_client, \
          patch("quaderno_companion.triggers.clipboard.set_clipboard_image", return_value=True) as mock_set_clip:
         mock_st = MagicMock()
         mock_st.reading_state = state
         mock_status.return_value = mock_st
+        mock_get_client.return_value = None
 
         res = await copy_active_page_to_clipboard()
 

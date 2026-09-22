@@ -353,6 +353,14 @@ async def open_document(
                     doc = pymupdf.open(stream=raw_bytes, filetype=fmt)
                     raw_bytes = doc.convert_to_pdf()
                     doc.close()
+                elif ext in (".md", ".markdown", ".txt"):
+                    from quaderno_companion.pipeline.templates import EinkDocumentBuilder
+                    builder = EinkDocumentBuilder(profile_name=settings.default_profile)
+                    text_content = raw_bytes.decode("utf-8", errors="replace")
+                    if ext in (".md", ".markdown"):
+                        raw_bytes = builder.render_markdown_pdf(title=doc_title, content_markdown=text_content)
+                    else:
+                        raw_bytes = builder.render_article_pdf(title=doc_title, content_html_or_text=text_content)
 
                 optimizer = EinkOptimizer(profile_name=settings.default_profile)
                 return optimizer.optimize_pdf(raw_bytes, trim_margins=True)

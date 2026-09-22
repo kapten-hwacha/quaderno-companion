@@ -42,6 +42,8 @@ hidden_imports = [
     "reportlab",
     "reportlab.platypus",
     "reportlab.lib",
+    "matplotlib",
+    "matplotlib.mathtext",
     "lz4",
     "lz4.frame",
     "dptrp1",

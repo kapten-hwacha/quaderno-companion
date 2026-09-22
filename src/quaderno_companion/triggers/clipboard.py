@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 from quaderno_companion.config import settings
 from quaderno_companion.device.manager import device_manager
@@ -40,10 +40,14 @@ def set_clipboard_image(image_bytes: bytes, image_format: str = "png") -> bool:
             if nsimage is not None:
                 success = pasteboard.writeObjects_([nsimage])
                 if success:
-                    logger.debug("Successfully copied image to macOS clipboard via AppKit.")
+                    logger.debug(
+                        "Successfully copied image to macOS clipboard via AppKit."
+                    )
                     return True
         except Exception as e:
-            logger.debug(f"AppKit NSPasteboard write failed, falling back to osascript: {e}")
+            logger.debug(
+                f"AppKit NSPasteboard write failed, falling back to osascript: {e}"
+            )
 
         # Fallback for macOS via osascript
         tmp_file = None
@@ -53,8 +57,12 @@ def set_clipboard_image(image_bytes: bytes, image_format: str = "png") -> bool:
                 tmp.write(image_bytes)
                 tmp_file = tmp.name
 
-            osa_type = "«class PNGf»" if image_format.lower() == "png" else "JPEG picture"
-            script = f'set the clipboard to (read (POSIX file "{tmp_file}") as {osa_type})'
+            osa_type = (
+                "«class PNGf»" if image_format.lower() == "png" else "JPEG picture"
+            )
+            script = (
+                f'set the clipboard to (read (POSIX file "{tmp_file}") as {osa_type})'
+            )
             subprocess.run(["osascript", "-e", script], check=True, timeout=5.0)
             logger.debug("Successfully copied image to macOS clipboard via osascript.")
             return True
@@ -103,10 +111,10 @@ def set_clipboard_image(image_bytes: bytes, image_format: str = "png") -> bool:
 
 
 async def get_active_page_image(
-    page: Optional[int] = None,
+    page: int | None = None,
     dpi: int = 200,
     from_screen: bool = False,
-) -> Tuple[bytes, str, Dict[str, Any]]:
+) -> tuple[bytes, str, dict[str, Any]]:
     """Retrieve an image of the currently open page or live screen.
 
     Args:
@@ -156,16 +164,22 @@ async def get_active_page_image(
         try:
             client = await device_manager.get_client()
             if client:
-                logger.info("No active document tracked; falling back to device screenshot.")
+                logger.info(
+                    "No active document tracked; falling back to device screenshot."
+                )
                 img_bytes = await client.take_screenshot()
-                return img_bytes, "jpeg", {
-                    "document_id": None,
-                    "title": "Quaderno Screen",
-                    "page": 1,
-                    "total_pages": 1,
-                    "from_screen": True,
-                    "format": "jpeg",
-                }
+                return (
+                    img_bytes,
+                    "jpeg",
+                    {
+                        "document_id": None,
+                        "title": "Quaderno Screen",
+                        "page": 1,
+                        "total_pages": 1,
+                        "from_screen": True,
+                        "format": "jpeg",
+                    },
+                )
         except Exception:
             pass
         raise ValueError("No active document currently open on Quaderno.")
@@ -174,8 +188,8 @@ async def get_active_page_image(
     title = state.title or "active_document"
     doc_id = state.document_id
 
-    # 1. Locate local PDF file in sync folder
-    candidate: Optional[Path] = None
+    # Locate potential local mirror file in sync folder
+    candidate: Path | None = None
     if settings.sync_dir.exists():
         direct = settings.sync_dir / f"{title}.pdf"
         if direct.exists():
@@ -191,38 +205,68 @@ async def get_active_page_image(
                 if sub_match.exists():
                     candidate = sub_match
 
-    pdf_bytes: Optional[bytes] = None
-    if candidate and candidate.exists():
-        try:
-            pdf_bytes = candidate.read_bytes()
-        except Exception as e:
-            logger.warning(f"Could not read local PDF {candidate}: {e}")
+    pdf_bytes: bytes | None = None
+    lookup_target = doc_id or (state.remote_path if state else None)
 
-    # 2. Download from device if not available locally
-    if not pdf_bytes:
+    # 1. Fetch newest version directly from Quaderno device (to capture latest notes/annotations)
+    if lookup_target:
         try:
             client = await device_manager.get_client()
             if client:
-                logger.info(f"Downloading active document '{title}' ({doc_id}) from Quaderno...")
-                pdf_bytes = await client.download_document_async(doc_id)
+                logger.info(
+                    f"Fetching latest active document '{title}' ({lookup_target}) from Quaderno..."
+                )
+                pdf_bytes = await client.download_document_async(lookup_target)
+                if pdf_bytes:
+                    # Update local copy with the newest fetched version
+                    try:
+                        if candidate and candidate.parent.exists():
+                            candidate.write_bytes(pdf_bytes)
+                        elif state.remote_path and settings.sync_dir.exists():
+                            rel = state.remote_path.replace("Document/", "").lstrip("/")
+                            dest = settings.sync_dir / rel
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            dest.write_bytes(pdf_bytes)
+                    except Exception as write_err:
+                        logger.debug(
+                            f"Could not update local cached copy of '{title}': {write_err}"
+                        )
         except Exception as dl_err:
-            logger.debug(f"Failed to download document from device: {dl_err}")
+            logger.debug(
+                f"Failed to fetch latest document from device (falling back to local cache): {dl_err}"
+            )
+
+    # 2. Fallback to local PDF if device is offline or download failed
+    if not pdf_bytes and candidate and candidate.exists():
+        try:
+            pdf_bytes = candidate.read_bytes()
+            logger.info(f"Using local cached copy of '{title}' from {candidate}")
+        except Exception as e:
+            logger.warning(f"Could not read local PDF {candidate}: {e}")
 
     # 3. If PDF still unavailable, fallback to live screen capture
     if not pdf_bytes:
-        logger.warning(f"Document PDF '{title}' not found locally or remotely. Falling back to screenshot.")
+        logger.warning(
+            f"Document PDF '{title}' not found locally or remotely. Falling back to screenshot."
+        )
         client = await device_manager.get_client()
         if client:
             img_bytes = await client.take_screenshot()
-            return img_bytes, "jpeg", {
-                "document_id": doc_id,
-                "title": title,
-                "page": target_page,
-                "total_pages": state.total_pages or 1,
-                "from_screen": True,
-                "format": "jpeg",
-            }
-        raise FileNotFoundError(f"Document '{title}' not found locally in {settings.sync_dir} and device is unreachable.")
+            return (
+                img_bytes,
+                "jpeg",
+                {
+                    "document_id": doc_id,
+                    "title": title,
+                    "page": target_page,
+                    "total_pages": state.total_pages or 1,
+                    "from_screen": True,
+                    "format": "jpeg",
+                },
+            )
+        raise FileNotFoundError(
+            f"Document '{title}' not found locally in {settings.sync_dir} and device is unreachable."
+        )
 
     # 4. Render page with PyMuPDF
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
@@ -249,10 +293,10 @@ async def get_active_page_image(
 
 
 async def copy_active_page_to_clipboard(
-    page: Optional[int] = None,
+    page: int | None = None,
     dpi: int = 200,
     from_screen: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Retrieve active Quaderno page image and write it to the host clipboard.
 
     Returns:

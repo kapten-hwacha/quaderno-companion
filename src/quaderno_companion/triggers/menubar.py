@@ -204,7 +204,16 @@ class QuadernoMenubarApp(AppBase):
 
     def __init__(self):
         super().__init__("📖 Quaderno", quit_button=None)
-        
+
+        # Hide Dock icon by configuring macOS activation policy as an Accessory app
+        if sys.platform == "darwin" and AppKit and type(AppKit).__name__ != "_DummyAppKit":
+            try:
+                AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+                    getattr(AppKit, "NSApplicationActivationPolicyAccessory", 1)
+                )
+            except Exception as e:
+                logger.debug(f"Failed to set accessory activation policy: {e}")
+
         # Menu Structure
         self.status_item = rumps.MenuItem("Status: Checking...")
         self.doc_item = rumps.MenuItem("Active Document: None")
@@ -1174,6 +1183,15 @@ def start_menubar_app(start_server: bool = True):
             daemon=True,
         )
         server_thread.start()
+
+    # Hide Dock icon by configuring macOS activation policy as an Accessory app
+    if AppKit and type(AppKit).__name__ != "_DummyAppKit":
+        try:
+            AppKit.NSApplication.sharedApplication().setActivationPolicy_(
+                getattr(AppKit, "NSApplicationActivationPolicyAccessory", 1)
+            )
+        except Exception as e:
+            logger.debug(f"Failed to set accessory activation policy: {e}")
 
     # Launch native menu bar app
     app = QuadernoMenubarApp()
